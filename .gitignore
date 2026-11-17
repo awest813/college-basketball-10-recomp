@@ -1,0 +1,8 @@
+# Game data and anything derived from it never goes in git.
+assets/
+generated/
+out/
+*.iso
+*.xex
+*.bin
+*.log

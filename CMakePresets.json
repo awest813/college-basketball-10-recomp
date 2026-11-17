@@ -1,0 +1,95 @@
+{
+    "version": 6,
+    "cmakeMinimumRequired": {
+        "major": 3,
+        "minor": 25,
+        "patch": 0
+    },
+    "configurePresets": [
+        {
+            "name": "win-base",
+            "hidden": true,
+            "generator": "Ninja Multi-Config",
+            "binaryDir": "${sourceDir}/out/build/${presetName}",
+            "cacheVariables": {
+                "CMAKE_CXX_COMPILER": "clang++",
+                "CMAKE_CONFIGURATION_TYPES": "Debug;Release;RelWithDebInfo",
+                "CMAKE_CROSS_CONFIGS": "all",
+                "CMAKE_DEFAULT_BUILD_TYPE": "Debug",
+                "CMAKE_DEFAULT_CONFIGS": "all",
+                "CMAKE_PREFIX_PATH": "C:/Users/allen/Downloads/Project/rexglue-sdk-0.11.0-win-amd64/win-amd64",
+                "CMAKE_CXX_COMPILER_TARGET": "x86_64-pc-windows-msvc",
+                "CMAKE_LINKER_TYPE": "MSVC"
+            },
+            "condition": {
+                "type": "equals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Windows"
+            }
+        },
+        {
+            "name": "linux-base",
+            "hidden": true,
+            "generator": "Ninja Multi-Config",
+            "binaryDir": "${sourceDir}/out/build/${presetName}",
+            "cacheVariables": {
+                "CMAKE_C_COMPILER": "clang",
+                "CMAKE_CXX_COMPILER": "clang++",
+                "CMAKE_CONFIGURATION_TYPES": "Debug;Release;RelWithDebInfo",
+                "CMAKE_CROSS_CONFIGS": "all",
+                "CMAKE_DEFAULT_BUILD_TYPE": "Debug",
+                "CMAKE_DEFAULT_CONFIGS": "all",
+                "CMAKE_PREFIX_PATH": "$env{REXGLUE_SDK}"
+            },
+            "condition": {
+                "type": "equals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Linux"
+            }
+        },
+        {
+            "name": "win-amd64",
+            "displayName": "Windows AMD64",
+            "description": "Multi-config build for Windows AMD64 using Clang",
+            "inherits": "win-base"
+        },
+        {
+            "name": "linux-amd64",
+            "displayName": "Linux AMD64",
+            "description": "Multi-config build for Linux AMD64 using Clang",
+            "inherits": "linux-base"
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "win-amd64-debug",
+            "configurePreset": "win-amd64",
+            "configuration": "Debug"
+        },
+        {
+            "name": "win-amd64-release",
+            "configurePreset": "win-amd64",
+            "configuration": "Release"
+        },
+        {
+            "name": "win-amd64-relwithdebinfo",
+            "configurePreset": "win-amd64",
+            "configuration": "RelWithDebInfo"
+        },
+        {
+            "name": "linux-amd64-debug",
+            "configurePreset": "linux-amd64",
+            "configuration": "Debug"
+        },
+        {
+            "name": "linux-amd64-release",
+            "configurePreset": "linux-amd64",
+            "configuration": "Release"
+        },
+        {
+            "name": "linux-amd64-relwithdebinfo",
+            "configurePreset": "linux-amd64",
+            "configuration": "RelWithDebInfo"
+        }
+    ]
+}

@@ -1,0 +1,11 @@
+# NCAA Basketball 10 (USA), default.xex SHA-256
+# 3201c28392f73af9c969a740181996e954d3c894a7117eb81f8ff50362de79ef
+# Title ID 454108C3, Media ID 78162526, version 0.0.0.1.
+#
+# Entries the automatic analysis misses. Each line says why it is here.
+
+[functions]
+# sub_82BA3ED0 (0x18 bytes) ends with `b 0x82BA46B8` into code no other function owns
+# (between the end of sub_82BA45A0 and sub_82BA4700). Inlining that tail left the
+# `bne cr6,0x82BA46EC` at 0x82BA46D4 unresolved. Make the tail a function of its own.
+0x82BA46B8 = {}
