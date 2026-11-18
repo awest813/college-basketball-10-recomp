@@ -56,9 +56,8 @@ Set `REXGLUE_SDK` to a Linux build of the SDK 0.11.0 and use the `linux-amd64` p
 window), and screenshots the game window with PrintWindow:
 
 ```powershell
-& tools\drive.ps1 -Exe outuild\win-amd64\Debug
-caabb10.exe -OutDir out\shots `
-  -GameArgs "--title.game_root=$PWDssets --ui.fullscreen=false --hid.mnk_mode=true" `
+& tools\drive.ps1 -Exe out\build\win-amd64\Debug\ncaabb10.exe -OutDir out\shots `
+  -GameArgs "--title.game_root=$PWD\assets --ui.fullscreen=false --hid.mnk_mode=true" `
   -Steps "wait:36","key:RETURN","wait:10","shot:after_start"
 ```
 
