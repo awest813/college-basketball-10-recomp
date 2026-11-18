@@ -16,7 +16,7 @@ endif ()
 rexglue_project(ncaabb10 OUTPUT_DIR generated/default)
 
 # Host sources. src/main.cpp stays on the executable.
-set(NCAABB10_HOST_SOURCES src/ncaabb10_hooks.cpp)
+set(NCAABB10_HOST_SOURCES src/ncaabb10_hooks.cpp src/kernel_fixes.cpp)
 
 # OBJECT and never STATIC, an archive drops the REX_EXPORT symbols.
 add_library(ncaabb10_common OBJECT ${NCAABB10_HOST_SOURCES})

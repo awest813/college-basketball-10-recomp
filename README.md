@@ -4,10 +4,9 @@ Static recompilation of **NCAA Basketball 10 (Xbox 360, USA)** with [ReXGlue](ht
 targeting Windows and Linux. No game files or code generated from them are in this repository:
 you supply your own disc.
 
-Status (Windows, Direct3D 12 Xenos backend, Debug build): boots, takes input, runs the first-run
-flow (favorite school, autosave prompt), renders the 3D campus court and the main menu, opens
-Play Now team select, and saves/loads the profile across restarts. Not yet played: an actual game.
-See `../NCAA_BB10_RECOMP_PLAN.md` for the full plan.
+Status (Windows, Direct3D 12 Xenos backend): a full Play Now game plays from tip-off to the
+post-game menu in a Release build; menus, profile and saves work. Known issues: in-game overlay text
+is sometimes missing, and a rare disc-read freeze while loading. See `../NCAA_BB10_RECOMP_PLAN.md` for the full plan.
 
 ## The game copy
 
@@ -34,8 +33,8 @@ The preset makes clang target `x86_64-pc-windows-msvc` and link with `link.exe`,
 binaries use the MSVC ABI; `build_win.cmd` sets up the Visual Studio environment first.
 
 ```
-build_win.cmd debug
-run_win.cmd debug
+build_win.cmd release
+run_win.cmd release
 ```
 
 Keyboard as pad (`--hid.mnk_mode=true`): Return = Start, Space = A, Backspace = B, arrows = D-pad,
@@ -61,5 +60,8 @@ window), and screenshots the game window with PrintWindow:
   -Steps "wait:36","key:RETURN","wait:10","shot:after_start"
 ```
 
-Steps are `wait:<seconds>`, `key:<System.Windows.Forms.Keys name>` and `shot:<name>`. Waits are
+`tools/to_game.ps1 -Out <folder>` drives a Release build from boot into a Duke at North Carolina
+game and screenshots it (it needs a profile save with autosave on in the build's `user` folder).
+
+Steps are `watch:<seconds>:<interval>:<prefix>`, `wait:<seconds>`, `key:<System.Windows.Forms.Keys name>` and `shot:<name>`. Waits are
 fixed, so leave margin: loads take 30-60 s in a Debug build.
