@@ -4,7 +4,9 @@ Static recompilation of **NCAA Basketball 10 (Xbox 360, USA)** with [ReXGlue](ht
 targeting Windows and Linux. No game files or code generated from them are in this repository:
 you supply your own disc.
 
-Status: boots to the title screen (PRESS START) on Windows with the Direct3D 12 Xenos backend.
+Status (Windows, Direct3D 12 Xenos backend, Debug build): boots, takes input, runs the first-run
+flow (favorite school, autosave prompt), renders the 3D campus court and the main menu, opens
+Play Now team select, and saves/loads the profile across restarts. Not yet played: an actual game.
 See `../NCAA_BB10_RECOMP_PLAN.md` for the full plan.
 
 ## The game copy
@@ -36,9 +38,29 @@ build_win.cmd debug
 run_win.cmd debug
 ```
 
+Keyboard as pad (`--hid.mnk_mode=true`): Return = Start, Space = A, Backspace = B, arrows = D-pad,
+W/A/S/D = left stick. Saves go to `out/build/win-amd64/<config>/user/`; the console's utility
+drive (`cache:`) is backed by `user/cache/`.
+
 Codegen runs as part of the build (about 2 minutes, 50k functions, ~270 MB of C++); the first
 full compile takes about 5 minutes on 14 jobs.
 
 ## Linux
 
 Set `REXGLUE_SDK` to a Linux build of the SDK 0.11.0 and use the `linux-amd64` preset. Not tested yet.
+
+## Automated testing
+
+`tools/drive.ps1` starts the game, feeds it keys through a file (the game follows the file named by
+`NCAABB10_INPUT_FILE` and injects the keys in process, so nothing goes to the desktop's focused
+window), and screenshots the game window with PrintWindow:
+
+```powershell
+& tools\drive.ps1 -Exe outuild\win-amd64\Debug
+caabb10.exe -OutDir out\shots `
+  -GameArgs "--title.game_root=$PWDssets --ui.fullscreen=false --hid.mnk_mode=true" `
+  -Steps "wait:36","key:RETURN","wait:10","shot:after_start"
+```
+
+Steps are `wait:<seconds>`, `key:<System.Windows.Forms.Keys name>` and `shot:<name>`. Waits are
+fixed, so leave margin: loads take 30-60 s in a Debug build.
