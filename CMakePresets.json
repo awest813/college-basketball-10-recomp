@@ -58,6 +58,15 @@
             "displayName": "Linux AMD64",
             "description": "Multi-config build for Linux AMD64 using Clang",
             "inherits": "linux-base"
+        },
+        {
+            "name": "win-amd64-patched",
+            "displayName": "Windows AMD64, patched SDK",
+            "description": "Builds against the patched SDK in ../rexglue-sdk-src (Release only, see tools/build_sdk.cmd)",
+            "inherits": "win-base",
+            "cacheVariables": {
+                "CMAKE_PREFIX_PATH": "${sourceDir}/../rexglue-sdk-src/out/install/win-amd64"
+            }
         }
     ],
     "buildPresets": [
@@ -90,6 +99,11 @@
             "name": "linux-amd64-relwithdebinfo",
             "configurePreset": "linux-amd64",
             "configuration": "RelWithDebInfo"
+        },
+        {
+            "name": "win-amd64-patched-release",
+            "configurePreset": "win-amd64-patched",
+            "configuration": "Release"
         }
     ]
 }

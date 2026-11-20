@@ -5,8 +5,8 @@ targeting Windows and Linux. No game files or code generated from them are in th
 you supply your own disc.
 
 Status (Windows, Direct3D 12 Xenos backend): a full Play Now game plays from tip-off to the
-post-game menu in a Release build; menus, profile and saves work. Known issues: in-game overlay text
-is sometimes missing, and a rare disc-read freeze while loading. See `../NCAA_BB10_RECOMP_PLAN.md` for the full plan.
+post-game menu in a Release build; menus, profile and saves work. Known issue: a disc-read freeze
+(`XamShowDirtyDiscErrorUI`) on the court loading screen in some boots. See `../NCAA_BB10_RECOMP_PLAN.md` for the full plan.
 
 ## The game copy
 
@@ -43,6 +43,24 @@ drive (`cache:`) is backed by `user/cache/`.
 
 Codegen runs as part of the build (about 2 minutes, 50k functions, ~270 MB of C++); the first
 full compile takes about 5 minutes on 14 jobs.
+
+## Patched SDK (recommended for Release)
+
+`patches/rexglue-sdk-0.11.0-texture-watch-race.patch` fixes a texture cache race in SDK 0.11.0 that
+left the in-game broadcast text (score bar, lineups, rankings) blank in about 1 game in 4. To build
+with it:
+
+```
+git clone --branch v0.11.0 --recurse-submodules https://github.com/rexglue/rexglue-sdk.git ..\rexglue-sdk-src
+git -C ..\rexglue-sdk-src apply ..\ncaabb10-recomp\patches\rexglue-sdk-0.11.0-texture-watch-race.patch
+tools\build_vulkan_deps.cmd
+tools\build_sdk.cmd
+build_win.cmd release 12 win-amd64-patched
+```
+
+`tools\build_vulkan_deps.cmd` needs `..\vulkan-deps` with Vulkan-Headers and Vulkan-Loader at
+`v1.4.363` and VulkanMemoryAllocator at `v3.3.0` (or set `VULKAN_SDK` to a LunarG SDK instead).
+The patched SDK is Release only, so use the stock preset for Debug builds.
 
 ## Linux
 

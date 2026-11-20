@@ -1,0 +1,84 @@
+diff --git a/src/gpu/xenos/pipeline/texture/cache.cpp b/src/gpu/xenos/pipeline/texture/cache.cpp
+index 1afb4bc..ef3d2e2 100644
+--- a/src/gpu/xenos/pipeline/texture/cache.cpp
++++ b/src/gpu/xenos/pipeline/texture/cache.cpp
+@@ -476,6 +476,24 @@ TextureCache::Texture::~Texture() {
+ 
+ void TextureCache::Texture::UpdateAndWatch(const ScopeGuard& watch_lock) {
+   SharedMemory& shared_memory = GetTextureCache().GetSharedMemory();
++  // The data was uploaded to the shared memory and the pages protected before this texture was
++  // loaded from it, but a CPU write in between (a title filling a texture on another thread, such
++  // as a glyph cache) invalidates and unprotects the pages while this texture is not watching yet.
++  // Watching those pages now would never fire and would leave the texture stale for good, so it
++  // stays outdated instead and reloads, uploading and protecting the pages again, when next used.
++  bool stays_outdated = false;
++  if (base_outdated_ &&
++      !shared_memory.IsRangeValid(watch_lock, GetKey().base_page << 12, GetGuestBaseSize())) {
++    stays_outdated = true;
++  }
++  if (mips_outdated_ &&
++      !shared_memory.IsRangeValid(watch_lock, GetKey().mip_page << 12, GetGuestMipsSize())) {
++    stays_outdated = true;
++  }
++  if (stays_outdated) {
++    GetTextureCache().texture_became_outdated_.store(true, std::memory_order_release);
++    return;
++  }
+   if (base_outdated_) {
+     REX_ASSERT(GetGuestBaseSize() != 0);
+     base_outdated_ = false;
+diff --git a/src/gpu/xenos/shared_memory.cpp b/src/gpu/xenos/shared_memory.cpp
+index 7db4abe..219bea9 100644
+--- a/src/gpu/xenos/shared_memory.cpp
++++ b/src/gpu/xenos/shared_memory.cpp
+@@ -206,6 +206,30 @@ SharedMemory::WatchHandle SharedMemory::WatchMemoryRange(const ScopeGuard&, u32
+   return reinterpret_cast<WatchHandle>(range);
+ }
+ 
++bool SharedMemory::IsRangeValid(const ScopeGuard&, u32 start, u32 length) const {
++  if (length == 0 || start >= kBufferSize) {
++    return true;
++  }
++  length = std::min(length, kBufferSize - start);
++  u32 page_first = start >> page_size_log2_;
++  u32 page_last = (start + length - 1) >> page_size_log2_;
++  u32 block_first = page_first >> 6;
++  u32 block_last = page_last >> 6;
++  for (u32 i = block_first; i <= block_last; ++i) {
++    u64 range_bits = UINT64_MAX;
++    if (i == block_first) {
++      range_bits &= ~((static_cast<u64>(1) << (page_first & 63)) - 1);
++    }
++    if (i == block_last && (page_last & 63) != 63) {
++      range_bits &= (static_cast<u64>(1) << ((page_last & 63) + 1)) - 1;
++    }
++    if ((system_page_flags_valid_[i] & range_bits) != range_bits) {
++      return false;
++    }
++  }
++  return true;
++}
++
+ void SharedMemory::UnwatchMemoryRange(WatchHandle handle) {
+   auto lock = AcquireLock();
+   UnlinkWatchRange(reinterpret_cast<WatchRange*>(handle));
+diff --git a/src/gpu/xenos/shared_memory.h b/src/gpu/xenos/shared_memory.h
+index 7ff20e2..223b16d 100644
+--- a/src/gpu/xenos/shared_memory.h
++++ b/src/gpu/xenos/shared_memory.h
+@@ -79,6 +79,15 @@ class REX_GPU_XENOS_API SharedMemory : public rex::NonCopyable, public IPhysical
+   ScopeGuard AcquireLock() const { return write_watch_.LockWriteWatches(); }
+   void UnwatchMemoryRange(WatchHandle handle);
+ 
++  /**
++   * Returns whether every page of the range is valid in the GPU memory copy, so a CPU write to it
++   * still faults and fires watches. A watch registered on an invalid page never fires, because
++   * nothing protects that page until it is requested again.
++   *
++   * @param lock The lock from AcquireLock, held by the caller.
++   */
++  bool IsRangeValid(const ScopeGuard& lock, u32 start, u32 length) const;
++
+   /**
+    * Uploads new data for ranges that changed and makes the host GPU memory backing them resident.
+    *
