@@ -4,9 +4,9 @@ Static recompilation of **NCAA Basketball 10 (Xbox 360, USA)** with [ReXGlue](ht
 targeting Windows and Linux. No game files or code generated from them are in this repository:
 you supply your own disc.
 
-Status (Windows, Direct3D 12 Xenos backend): a full Play Now game plays from tip-off to the
-post-game menu in a Release build; menus, profile and saves work. Known issue: a disc-read freeze
-(`XamShowDirtyDiscErrorUI`) on the court loading screen in some boots. See `../NCAA_BB10_RECOMP_PLAN.md` for the full plan.
+Status (Windows, Direct3D 12 Xenos backend, patched SDK): a full Play Now game plays from tip-off
+to the post-game menu in a Release build; menus, profile, saves and the in-game broadcast overlays
+work. See `../NCAA_BB10_RECOMP_PLAN.md` for the full plan.
 
 ## The game copy
 
@@ -46,13 +46,21 @@ full compile takes about 5 minutes on 14 jobs.
 
 ## Patched SDK (recommended for Release)
 
-`patches/rexglue-sdk-0.11.0-texture-watch-race.patch` fixes a texture cache race in SDK 0.11.0 that
-left the in-game broadcast text (score bar, lineups, rankings) blank in about 1 game in 4. To build
-with it:
+Two patches fix races in SDK 0.11.0 that this game hits:
+
+- `patches/rexglue-sdk-0.11.0-texture-watch-race.patch`: the texture cache could stop watching a
+  texture the CPU was still filling, leaving the broadcast text (score bar, lineups, rankings)
+  blank in about 1 game in 4.
+- `patches/rexglue-sdk-0.11.0-physical-heap-release-race.patch`: freeing physical memory on one
+  thread could clear an allocation another thread had just made in the same pages; the game's
+  next disc read into it failed and it froze on a dirty-disc error while loading a game.
+
+To build with them:
 
 ```
 git clone --branch v0.11.0 --recurse-submodules https://github.com/rexglue/rexglue-sdk.git ..\rexglue-sdk-src
 git -C ..\rexglue-sdk-src apply ..\ncaabb10-recomp\patches\rexglue-sdk-0.11.0-texture-watch-race.patch
+git -C ..\rexglue-sdk-src apply ..\ncaabb10-recomp\patches\rexglue-sdk-0.11.0-physical-heap-release-race.patch
 tools\build_vulkan_deps.cmd
 tools\build_sdk.cmd
 build_win.cmd release 12 win-amd64-patched
@@ -60,7 +68,12 @@ build_win.cmd release 12 win-amd64-patched
 
 `tools\build_vulkan_deps.cmd` needs `..\vulkan-deps` with Vulkan-Headers and Vulkan-Loader at
 `v1.4.363` and VulkanMemoryAllocator at `v3.3.0` (or set `VULKAN_SDK` to a LunarG SDK instead).
-The patched SDK is Release only, so use the stock preset for Debug builds.
+The patched SDK is Release only, so use the stock preset for Debug builds (which still have both
+bugs).
+
+`src/diagnostics.cpp` logs the game's disc-error callback and any failed or slow file read (with
+the guest page state of the buffer); set `NCAABB10_TRACE_PHYS=1` to also log physical allocations
+and frees.
 
 ## Linux
 

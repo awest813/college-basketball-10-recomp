@@ -1,0 +1,46 @@
+diff --git a/src/kernel/memory.cpp b/src/kernel/memory.cpp
+index 4ca5049..ab576d0 100644
+--- a/src/kernel/memory.cpp
++++ b/src/kernel/memory.cpp
+@@ -1788,6 +1788,8 @@ bool PhysicalHeap::Alloc(u32 size, u32 alignment, u32 allocation_type, u32 prote
+   PendingScribble scribble(allocation_type, protect);
+   auto reconcile_lock = AcquireHostPageReconcileLock();
+   std::lock_guard<std::recursive_mutex> heap_lock(heap_mutex_);
++  // The parent page table is shared by every view of physical memory.
++  std::lock_guard<std::recursive_mutex> parent_lock(parent_heap_->heap_mutex_);
+ 
+   // The parent heap allocation gives a physical address in the first 512MB.
+   u32 parent_heap_start = GetPhysicalAddress(heap_base_);
+@@ -1873,6 +1875,8 @@ bool PhysicalHeap::AllocRange(u32 low_address, u32 high_address, u32 size, u32 a
+   PendingScribble scribble(allocation_type, protect);
+   auto reconcile_lock = AcquireHostPageReconcileLock();
+   std::lock_guard<std::recursive_mutex> heap_lock(heap_mutex_);
++  // The parent page table is shared by every view of physical memory.
++  std::lock_guard<std::recursive_mutex> parent_lock(parent_heap_->heap_mutex_);
+ 
+   // The parent heap allocation gives a physical address in the first 512MB.
+   low_address = std::max(heap_base_, low_address);
+@@ -1906,6 +1910,9 @@ bool PhysicalHeap::AllocSystemHeap(u32 size, u32 alignment, u32 allocation_type,
+ 
+ bool PhysicalHeap::Decommit(u32 address, u32 size) {
+   std::lock_guard lock(memory_->watch_mutex_);
++  // Same locks as Release, so an allocation cannot interleave with the two page table updates.
++  std::lock_guard<std::recursive_mutex> heap_lock(heap_mutex_);
++  std::lock_guard<std::recursive_mutex> parent_lock(parent_heap_->heap_mutex_);
+ 
+   u32 parent_address = GetPhysicalAddress(address);
+   if (!parent_heap_->DecommitLocked(parent_address, size)) {
+@@ -1919,6 +1926,13 @@ bool PhysicalHeap::Decommit(u32 address, u32 size) {
+ 
+ bool PhysicalHeap::Release(u32 base_address, u32* out_region_size) {
+   std::lock_guard lock(memory_->watch_mutex_);
++  // Hold this view's and the parent's page tables for the whole release, in the order Alloc and
++  // AllocFixed take them. Without them an allocation on another thread could take the physical
++  // pages released in the parent before this view's range is released, and that view release
++  // then cleared the new allocation's pages (a title's next file read into them failed with
++  // STATUS_ACCESS_VIOLATION).
++  std::lock_guard<std::recursive_mutex> heap_lock(heap_mutex_);
++  std::lock_guard<std::recursive_mutex> parent_lock(parent_heap_->heap_mutex_);
+ 
+   u32 parent_base_address = GetPhysicalAddress(base_address);
+   if (!parent_heap_->ReleaseLocked(parent_base_address, out_region_size)) {
