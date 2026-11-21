@@ -40,9 +40,15 @@ function Watch($v) {
   for ($i = 1; $i -le $n; $i++) { Start-Sleep -Seconds ([double]$every); if ($p.HasExited) { return }; Shot ('{0}{1:D3}' -f $prefix, $i) | Out-Null }
   "watched $n shots as $prefix"
 }
+# burst:<count>:<milliseconds>:<prefix> takes <count> screenshots <milliseconds> apart.
+function Burst($v) {
+  $count, $ms, $prefix = $v.Split(':')
+  for ($i = 1; $i -le [int]$count; $i++) { Shot ('{0}{1:D3}' -f $prefix, $i) | Out-Null; Start-Sleep -Milliseconds ([int]$ms) }
+  "burst $count shots as $prefix"
+}
 foreach ($s in $Steps) {
   if ($p.HasExited) { "game exited with code $($p.ExitCode)"; break }
   $k, $v = $s.Split(':', 2)
-  switch ($k) { 'wait' { Start-Sleep -Seconds ([double]$v) } 'shot' { Shot $v } 'key' { Key $v } 'watch' { Watch $v } }
+  switch ($k) { 'wait' { Start-Sleep -Seconds ([double]$v) } 'shot' { Shot $v } 'key' { Key $v } 'watch' { Watch $v } 'burst' { Burst $v } }
 }
 if (-not $Keep -and -not $p.HasExited) { Stop-Process -Id $p.Id -Force; "stopped" }

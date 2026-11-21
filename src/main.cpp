@@ -7,6 +7,8 @@
 #include <rex/kernel/title_runtime.h>
 #include <rex/logging/log_category.h>
 #include <rex/path_settings.h>
+#include <rex/setting.h>
+#include <rex/settings_registry.h>
 
 #include <chrono>
 #include <cstdlib>
@@ -111,6 +113,21 @@ class Ncaabb10App : public rex::app::TitleApp {
   Ncaabb10App() : TitleApp("ncaabb10", kPPCImageConfig) {}
 
  protected:
+  // Project defaults, at the title layer: the config file, REX_* environment variables and the
+  // command line still override them.
+  rex::Result<void> OnConfigure(rex::SettingsRegistry& settings) override {
+    REX_TRY_VOID(TitleApp::OnConfigure(settings));
+    // The SDK picks the ROV render target path on Intel GPUs. With it this game runs at 12-20 fps
+    // in game on an Arc A750 (GPU 3D engine 93% busy); with host render targets (RTV) it holds
+    // about 60 fps and renders the same.
+    if (auto set = settings.SetText(rex::SettingLayer::kTitle, "gpu.d3d12.render_target_path", "rtv");
+        !set) {
+      REXLOG_WARN("ncaabb10: could not default the render target path: {}",
+                  set.error().GetDescription());
+    }
+    return rex::Ok();
+  }
+
   rex::Result<void> OnTitleLaunch(rex::kernel::TitleRuntime& title) override {
     if (auto mounted = MountUtilityDrive(title); !mounted) {
       // Not fatal: the game runs without the utility drive, only slower to load.
