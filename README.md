@@ -75,6 +75,20 @@ bugs).
 the guest page state of the buffer); set `NCAABB10_TRACE_PHYS=1` to also log physical allocations
 and frees.
 
+## Performance
+
+Live play holds 60 fps on an Intel Arc A750 (Release, patched SDK). Two project defaults matter:
+
+- `gpu.d3d12.render_target_path` defaults to `rtv` (set in `src/main.cpp`). The SDK would pick
+  `rov` on Intel GPUs, which runs this game at 12-20 fps. Override with
+  `--gpu.d3d12.render_target_path=rov` if a scene renders wrong.
+- `src/gpu_wait.cpp` makes the game's Direct3D GPU wait sleep instead of spinning a core
+  (`NCAABB10_GPU_WAIT_SPIN=1` restores the spin).
+
+Measuring: `NCAABB10_PERF=1` logs fps, frame times, CPU and the busiest threads every 5 s;
+`NCAABB10_PROFILE=1` adds a sampling profile of guest functions every 10 s (it costs fps while
+on); `tools/perf_run.ps1 -Out <folder>` runs a game and prints in-game fps and GPU use.
+
 ## Linux
 
 Set `REXGLUE_SDK` to a Linux build of the SDK 0.11.0 and use the `linux-amd64` preset. Not tested yet.
