@@ -1,0 +1,40 @@
+diff --git a/src/gpu/xenos/command_processor.cpp b/src/gpu/xenos/command_processor.cpp
+index 5e58c53..f50da0e 100644
+--- a/src/gpu/xenos/command_processor.cpp
++++ b/src/gpu/xenos/command_processor.cpp
+@@ -10,6 +10,7 @@
+  */
+ 
+ #include <bit>
++#include <bitset>
+ #include <algorithm>
+ #include <chrono>
+ #include <cinttypes>
+@@ -45,6 +46,18 @@ using namespace rex::xenos;
+ 
+ namespace {
+ 
++// The registers the register table describes, so a write checks one bit instead of a switch
++// over the whole table.
++const std::bitset<RegisterFile::kRegisterCount> kKnownRegisters = [] {
++  std::bitset<RegisterFile::kRegisterCount> known;
++  for (u32 i = 0; i < RegisterFile::kRegisterCount; ++i) {
++    if (RegisterFile::GetRegisterInfo(i)) {
++      known.set(i);
++    }
++  }
++  return known;
++}();
++
+ ReadbackResolveMode ParseReadbackResolveMode(std::string_view value) {
+   if (value == "fast") {
+     return ReadbackResolveMode::kFast;
+@@ -349,7 +362,7 @@ void CommandProcessor::WriteRegister(u32 index, u32 value) {
+ 
+   // Volatile for the WAIT_REG_MEM loop.
+   const_cast<volatile u32&>(regs.values[index]) = value;
+-  if (!regs.GetRegisterInfo(index)) {
++  if (!kKnownRegisters[index]) {
+     REXGPU_WARN_ONCE(unknown_write_once_, index, "GPU: Write to unknown register ({:04X} = {:08X})",
+                      index, value);
+   }

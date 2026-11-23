@@ -3,6 +3,8 @@
 // it and credits the cycles the thread used to that location. Every 10 seconds it logs the busiest recompiled guest functions overall and for
 // the three busiest threads. Addresses in the recompiled code section resolve to sub_XXXXXXXX
 // through the generated guest to host function table; others count under their module.
+// NCAABB10_PROFILE=callers also walks the stack of samples that land outside the game and the
+// SDK (the C runtime, the OS, the GPU driver) and logs which game or SDK function called in.
 
 #if defined(_WIN32)
 
@@ -39,6 +41,7 @@ struct ThreadSlot {
   uint64_t last_cycles = 0;
   std::string name;
   std::unordered_map<uint64_t, uint64_t> hits;  // key -> CPU cycles; key: guest address or module base | 1
+  std::map<std::pair<uint64_t, uint64_t>, uint64_t> via;  // (outside key, caller key) -> CPU cycles
   uint64_t samples = 0;                          // CPU cycles sampled
 };
 
@@ -47,6 +50,8 @@ constexpr uint64_t kMinCycles = 400000;
 
 class Sampler {
  public:
+  explicit Sampler(bool callers) : callers_(callers) {}
+
   void Run() {
     BuildFunctionTable();
     SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS);
@@ -57,7 +62,7 @@ class Sampler {
     auto window_start = std::chrono::steady_clock::now();
     auto last_refresh = window_start - std::chrono::seconds(10);
     CONTEXT context{};
-    context.ContextFlags = CONTEXT_CONTROL;
+    context.ContextFlags = callers_ ? CONTEXT_FULL : CONTEXT_CONTROL;
     while (true) {
       const auto now = std::chrono::steady_clock::now();
       if (now - last_refresh > std::chrono::seconds(1)) {
@@ -78,11 +83,19 @@ class Sampler {
           continue;
         }
         const BOOL got = GetThreadContext(slot.handle, &context);
+        uint64_t caller = 0;
+        if (got && callers_ && !IsOurs(context.Rip)) {
+          caller = Caller(context);  // While suspended: the walk reads the thread's stack.
+        }
         ResumeThread(slot.handle);
         if (got) {
           // Weight by the cycles used since the last tick, so shares are shares of CPU time.
-          slot.hits[Key(context.Rip)] += used;
+          const uint64_t key = Key(context.Rip);
+          slot.hits[key] += used;
           slot.samples += used;
+          if (caller) {
+            slot.via[{key, caller}] += used;
+          }
         }
       }
       if (now - window_start > std::chrono::seconds(10)) {
@@ -111,6 +124,52 @@ class Sampler {
         code_end_ = code_begin_ + section->Misc.VirtualSize;
       }
     }
+  }
+
+  // Whether the address is in the executable (recompiled or host code) or an SDK module.
+  bool IsOurs(uintptr_t rip) {
+    HMODULE module = nullptr;
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            reinterpret_cast<LPCWSTR>(rip), &module)) {
+      return false;
+    }
+    auto it = ours_.find(module);
+    if (it != ours_.end()) {
+      return it->second;
+    }
+    wchar_t path[MAX_PATH] = {};
+    GetModuleFileNameW(module, path, MAX_PATH);
+    const wchar_t* file = wcsrchr(path, L'\\');
+    file = file ? file + 1 : path;
+    const bool ours = module == GetModuleHandleW(nullptr) || _wcsnicmp(file, L"rex", 3) == 0;
+    ours_.emplace(module, ours);
+    return ours;
+  }
+
+  // The key of the nearest frame up the stack that is game or SDK code, or 0.
+  uint64_t Caller(CONTEXT context) {
+    for (int depth = 0; depth < 32; ++depth) {
+      DWORD64 image_base = 0;
+      PRUNTIME_FUNCTION function = RtlLookupFunctionEntry(context.Rip, &image_base, nullptr);
+      if (function) {
+        void* handler_data = nullptr;
+        DWORD64 establisher_frame = 0;
+        RtlVirtualUnwind(UNW_FLAG_NHANDLER, image_base, context.Rip, function, &context,
+                         &handler_data, &establisher_frame, nullptr);
+      } else {
+        // A leaf function: the return address is on top of the stack.
+        context.Rip = *reinterpret_cast<const DWORD64*>(context.Rsp);
+        context.Rsp += 8;
+      }
+      if (!context.Rip) {
+        return 0;
+      }
+      if (IsOurs(context.Rip)) {
+        return Key(context.Rip);
+      }
+    }
+    return 0;
   }
 
   // A guest address for recompiled code, otherwise the module base with the low bit set.
@@ -240,15 +299,32 @@ class Sampler {
       for (size_t i = 0; i < busy.size() && i < 3; ++i) {
         REXLOG_INFO("ncaabb10: profile thread {} ({:.0f}% of total): {}", busy[i]->name,
                     100.0 * busy[i]->samples / total, Top(busy[i]->hits, busy[i]->samples, 20));
+        if (!busy[i]->via.empty()) {
+          std::vector<std::pair<uint64_t, std::pair<uint64_t, uint64_t>>> sorted;
+          for (const auto& [keys, n] : busy[i]->via) {
+            sorted.emplace_back(n, keys);
+          }
+          std::sort(sorted.rbegin(), sorted.rend());
+          std::string out;
+          for (size_t j = 0; j < sorted.size() && j < 15; ++j) {
+            out += std::format("{}{} <- {} {:.1f}%", j ? ", " : "", Name(sorted[j].second.first),
+                               Name(sorted[j].second.second),
+                               100.0 * sorted[j].first / busy[i]->samples);
+          }
+          REXLOG_INFO("ncaabb10: profile thread {} callers: {}", busy[i]->name, out);
+        }
       }
     }
     for (auto& [tid, slot] : threads_) {
       slot.hits.clear();
+      slot.via.clear();
       slot.samples = 0;
     }
   }
 
   std::vector<GuestFunction> functions_;
+  bool callers_ = false;
+  std::unordered_map<HMODULE, bool> ours_;
   bool symbols_ = false;
   std::unordered_map<uint64_t, std::string> symbol_names_;
   uintptr_t code_begin_ = 0, code_end_ = 0;
@@ -259,9 +335,10 @@ class Sampler {
 const bool g_sampler_started = [] {
   const char* value = std::getenv("NCAABB10_PROFILE");
   if (value && *value && *value != '0') {
-    std::thread([] {
+    const bool callers = std::strcmp(value, "callers") == 0;
+    std::thread([callers] {
       std::this_thread::sleep_for(std::chrono::seconds(3));  // Let the app set up logging.
-      static Sampler sampler;
+      static Sampler sampler(callers);
       sampler.Run();
     }).detach();
   }

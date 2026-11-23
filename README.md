@@ -105,7 +105,7 @@ full compile takes about 5 minutes on 14 jobs.
 
 ## Patched SDK (recommended for Release)
 
-Four patches fix SDK 0.11.0 bugs that this game hits:
+Five patches fix SDK 0.11.0 bugs that this game hits, or cut its cost:
 
 - `patches/rexglue-sdk-0.11.0-texture-watch-race.patch`: the texture cache could stop watching a
   texture the CPU was still filling, leaving the broadcast text (score bar, lineups, rankings)
@@ -119,6 +119,9 @@ Four patches fix SDK 0.11.0 bugs that this game hits:
 - `patches/rexglue-sdk-0.11.0-profile-name.patch`: the profile was always named "User" and the
   storage device "Dummy HDD" on the game's menus and save screens. Adds `kernel.gamertag` (the
   project sets "Player"; Options changes it) and names the drives Hard Drive and Disc Drive.
+- `patches/rexglue-sdk-0.11.0-register-write-lookup.patch`: every GPU register write looked the
+  register up in a switch over the whole register table, only to warn about unknown ones; this
+  was 3-6% of the GPU command thread. Checks a bitset built once instead.
 
 To build with them:
 
@@ -128,6 +131,7 @@ git -C ..\rexglue-sdk-src apply ..\ncaabb10-recomp\patches\rexglue-sdk-0.11.0-te
 git -C ..\rexglue-sdk-src apply ..\ncaabb10-recomp\patches\rexglue-sdk-0.11.0-physical-heap-release-race.patch
 git -C ..\rexglue-sdk-src apply ..\ncaabb10-recomp\patches\rexglue-sdk-0.11.0-overlay-self-close.patch
 git -C ..\rexglue-sdk-src apply ..\ncaabb10-recomp\patches\rexglue-sdk-0.11.0-profile-name.patch
+git -C ..\rexglue-sdk-src apply ..\ncaabb10-recomp\patches\rexglue-sdk-0.11.0-register-write-lookup.patch
 tools\build_vulkan_deps.cmd
 tools\build_sdk.cmd
 build_win.cmd release 12 win-amd64-patched
@@ -160,7 +164,27 @@ Live play holds 60 fps on an Intel Arc A750 (Release, patched SDK). Two project 
 
 Measuring: `NCAABB10_PERF=1` logs fps, frame times, CPU and the busiest threads every 5 s;
 `NCAABB10_PROFILE=1` adds a sampling profile of guest functions every 10 s (it costs fps while
-on); `tools/perf_run.ps1 -Out <folder>` runs a game and prints in-game fps and GPU use.
+on), and `NCAABB10_PROFILE=callers` also names the game or SDK function behind time spent in the
+C runtime, the OS or the GPU driver; `tools/perf_run.ps1 -Out <folder>` runs a game and prints
+in-game fps and GPU use.
+
+Where the time goes in game (4 runs, A750): live play averages 58-60 fps and the busiest host
+thread is the GPU command processor, at 0.4-0.6 of a core on average and close to a full core in
+the heaviest stretches, where a 5 s window can dip to about 50 fps. Its time splits into the GPU
+driver recording the frame's D3D12 commands (15-19%), copying guest memory the game rewrites every
+frame into the GPU's copy (12-16%, about 700 MB/s), page protection for those watches (about 5%)
+and register writes (about 9%). Tried and left off:
+
+- Keeping the title's vblank at 60 Hz with `gpu.vsync=false` (an SDK experiment, not kept; the
+  SDK ties both to `gpu.vsync` and raises it every 1 ms without vsync): the game waits
+  for a vblank per frame, so frames a little over 16.7 ms turn into 33 ms ones (50-54 fps). The
+  SDK's 1 ms vblank without vsync lets them slip by a millisecond instead.
+- `gpu.xenos.clear_memory_page_state=false`: the SDK re-uploads every CPU-supplied page each frame
+  by default (Xenia only does this for a few games); off cuts the copies from about 700 to 480 MB/s
+  but did not change fps (58.4-59.5 against 58.9-59.1), and it would let writes the watches miss
+  go stale, so it stays on.
+- `gpu.xenos.readback_memexport=false`: the per-frame uploads are the game's own writes, not
+  memexport readback; no change.
 
 ## Linux
 
