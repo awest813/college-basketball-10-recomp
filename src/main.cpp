@@ -298,6 +298,12 @@ class Ncaabb10App : public rex::app::TitleApp {
         // The title renders 16:9; keep that shape on 16:10 and ultrawide displays.
         {"ui.aspect_ratio", "16:9"},
         {"gpu.d3d12.allow_tearing", "false"},
+        // The practice court behind the main menu reinterprets its depth buffer as a 640 wide 4x
+        // MSAA target with an unclipped rectangle and an 8192 scissor. Without running that
+        // draw's vertex shader on the CPU the SDK sizes the target to all of EDRAM; it wraps over
+        // the color buffer, and every frame without light flares after it presents black (5-10 s
+        // at a time). Xenia runs it on the CPU by default; only such unclipped draws pay for it.
+        {"gpu.xenos.execute_unclipped_draw_vs_on_cpu", "true"},
         // The keyboard is player 1's controller too, so the game is playable without a pad. A
         // connected pad still works: the keyboard merges into user 0 with the first pad.
         {"hid.mnk_mode", "true"},

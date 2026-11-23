@@ -70,7 +70,9 @@ Options (F1) covers display (fullscreen, aspect ratio, render scale), graphics (
 vsync, render path), audio (volume, mute), controls (keyboard as pad, vibration, deadzones) and
 the player name (patched SDK) the game shows on its menus and save screens. Changes apply at once
 and are saved to `ncaabb10_options.toml` beside the executable; settings marked * apply after a
-restart (the player name applies on Play when changed from the launcher).
+restart (the player name applies on Play when changed from the launcher). Untick "Show this
+launcher at startup" to go straight to the game; hold Shift while starting to see the launcher
+again.
 
 ### Saves
 
@@ -82,12 +84,6 @@ to the profile's ID, not its name, so renaming the player keeps them. Checked: s
 loading and deleting the profile, a roster set and a Dynasty; the profile autosave; and loading a
 Dynasty back to the same week. Online menus (Xbox Live, Dynamic Update Hub, ESPN on demand) say
 you must be signed in to Xbox Live, as the console does offline.
-
-Known issue: after quitting a Dynasty, the idle practice court behind the main menu sometimes goes
-black for 5 to 10 seconds at a time (press Start for the menu as usual). It does not happen every
-time; full readback, the accurate render path and `direct_host_resolve=false` each ran clean once,
-but so did the default on a retry, so the cause is not pinned down. Untick "Show this launcher at startup" to go straight to the game;
-hold Shift while starting to see the launcher again.
 
 ## Building on Windows
 
@@ -155,6 +151,12 @@ Live play holds 60 fps on an Intel Arc A750 (Release, patched SDK). Two project 
   `--gpu.d3d12.render_target_path=rov` if a scene renders wrong.
 - `src/gpu_wait.cpp` makes the game's Direct3D GPU wait sleep instead of spinning a core
   (`NCAABB10_GPU_WAIT_SPIN=1` restores the spin).
+- `gpu.xenos.execute_unclipped_draw_vs_on_cpu` defaults to `true` (Xenia's default; the SDK's is
+  `false`). The practice court behind the main menu draws an unclipped rectangle with an 8192
+  scissor into a 4x MSAA view of its depth buffer. Without running that vertex shader on the CPU
+  the SDK sizes the target to all of EDRAM, it wraps over the color buffer, and the court went black
+  for 5 to 10 seconds whenever no light flares were on screen. It costs about 1 fps in game
+  (57.1 against 58.4) and lowers GPU use (57% against 70%).
 
 Measuring: `NCAABB10_PERF=1` logs fps, frame times, CPU and the busiest threads every 5 s;
 `NCAABB10_PROFILE=1` adds a sampling profile of guest functions every 10 s (it costs fps while
