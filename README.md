@@ -22,7 +22,8 @@ Only this executable is supported (the analysis config is tied to it):
 The launcher sets the game up for you: start `ncaabb10.exe`, choose **Set up from a disc image
 (.iso)** and it copies the game into `game/` next to the build's `user/` folder (about 7 GB), checks
 `default.xex` and enables Play. **Use an extracted folder** accepts a folder you extracted yourself
-(the folder with `default.xex`, or the one above it). For development, extracting into `assets/`
+(the folder with `default.xex`, or the one above it). The copy goes into `game.partial` first and replaces `game/`
+only once `default.xex` verifies, so Cancel (or Esc) leaves an existing setup untouched. For development, extracting into `assets/`
 works too:
 
 ```
@@ -128,6 +129,9 @@ window), and screenshots the game window with PrintWindow:
   -GameArgs "--title.game_root=$PWD\assets --ui.fullscreen=false --hid.mnk_mode=true" `
   -Steps "wait:36","key:RETURN","wait:10","shot:after_start"
 ```
+
+`NCAABB10_TEST_ISO=<path>` makes the launcher start the disc image setup on that file, as if
+chosen in the file dialog (which a script cannot drive); the log reports the outcome.
 
 Steps also include `ui:<KEY>[+ALT]`, which pushes the key through the window's own event queue so
 it reaches the launcher and the F1/F11/Alt+Enter binds, and `winsize:<name>`. For example, the

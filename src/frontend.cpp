@@ -5,6 +5,7 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -352,6 +353,35 @@ class DiscExtractor {
   void Fail(std::string text) {
     SetStatus(std::move(text));
     failed_ = true;
+  }
+
+  // Extracts into <destination>.partial and swaps it in only once default.xex verifies, so a
+  // canceled or failed copy never leaves a half-written game folder behind.
+  void Run(fs::path iso, fs::path destination) {
+    fs::path work = destination;
+    work += ".partial";
+    fs::path old = destination;
+    old += ".old";
+    std::error_code ec;
+    fs::remove_all(work, ec);
+    Extract(iso, work);
+    if (!failed_) {
+      fs::remove_all(old, ec);
+      if (fs::exists(destination, ec)) {
+        fs::rename(destination, old, ec);
+      }
+      if (!ec) {
+        fs::rename(work, destination, ec);
+      }
+      if (ec) {
+        Fail("Could not move the copied game into " + destination.string() + ": " + ec.message());
+      } else {
+        fs::remove_all(old, ec);
+      }
+    }
+    if (failed_) {
+      fs::remove_all(work, ec);
+    }
     done_ = true;
   }
 
@@ -409,7 +439,7 @@ class DiscExtractor {
     return true;
   }
 
-  void Run(fs::path iso, fs::path destination) {
+  void Extract(const fs::path& iso, const fs::path& destination) {
     std::ifstream in(iso, std::ios::binary);
     if (!in) {
       return Fail("Could not open the disc image.");
@@ -486,7 +516,6 @@ class DiscExtractor {
     switch (CheckGameFolder(destination)) {
       case GameCheck::kOk:
         SetStatus("Done.");
-        done_ = true;
         return;
       case GameCheck::kWrongVersion:
         return Fail("This is a different version of the game than the one this port was made for "
@@ -649,8 +678,15 @@ class LauncherDialog final : public rex::ui::DialogBase {
   enum class Result { kNone, kPlay, kQuit };
 
   LauncherDialog(rex::ui::IUISystem& ui, fs::path folder, fs::path default_folder)
-      : ui_(ui), folder_(std::move(folder)), default_folder_(std::move(default_folder)) {
+      : ui_(ui),
+        folder_(folder.lexically_normal().make_preferred()),
+        default_folder_(default_folder.lexically_normal().make_preferred()) {
     Recheck();
+    // Test hook, like NCAABB10_INPUT_FILE: run the disc image setup on this file as if it had
+    // been chosen in the file dialog, which a test script cannot drive.
+    if (const char* iso = std::getenv("NCAABB10_TEST_ISO"); iso && *iso) {
+      StartSetup(fs::path(std::u8string(iso, iso + std::strlen(iso))));
+    }
   }
 
   Result result() const { return result_; }
@@ -659,6 +695,11 @@ class LauncherDialog final : public rex::ui::DialogBase {
   bool Draw(ImGuiIO& io) override {
     if (extractor_ && extractor_->Done()) {
       extractor_->Join();
+      const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() -
+                                                           extract_start_).count();
+      REXLOG_INFO("ncaabb10: disc setup {} after {:.0f} s ({} MB): {}",
+                  extractor_->Failed() ? "failed" : "done", seconds,
+                  extractor_->BytesDone() >> 20, extractor_->Status());
       if (extractor_->Failed()) {
         message_ = extractor_->Status() + " Your settings were not changed; you can try again.";
         message_is_error_ = true;
@@ -690,7 +731,10 @@ class LauncherDialog final : public rex::ui::DialogBase {
       ImGui::TextDisabled("%.0f of %.0f MB   %s", extractor_->BytesDone() / 1048576.0,
                           extractor_->BytesTotal() / 1048576.0, extractor_->Status().c_str());
       ImGui::TextDisabled("Into %s", extract_to_.string().c_str());
-      if (ImGui::Button("Cancel", ImVec2(110, 0))) {
+      const bool focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) ||
+                           !ImGui::IsWindowFocused(ImGuiFocusedFlags_AnyWindow);
+      if (ImGui::Button("Cancel (Esc)", ImVec2(130, 0)) ||
+          (focused && ImGui::IsKeyPressed(ImGuiKey_Escape, false))) {
         extractor_->Cancel();
       }
       ImGui::End();
@@ -803,6 +847,10 @@ class LauncherDialog final : public rex::ui::DialogBase {
     if (!chosen || chosen->empty()) {
       return;
     }
+    StartSetup(chosen->front());
+  }
+
+  void StartSetup(const fs::path& iso) {
     std::error_code ec;
     fs::create_directories(default_folder_, ec);
     const auto space = fs::space(fs::exists(default_folder_, ec) ? default_folder_
@@ -814,13 +862,16 @@ class LauncherDialog final : public rex::ui::DialogBase {
                     "About 7 GB of free space is needed for the copied game in %s (%.1f GB free).",
                     default_folder_.string().c_str(), space.available / 1073741824.0);
       message_ = text;
+      REXLOG_WARN("ncaabb10: disc setup: {}", message_);
       message_is_error_ = true;
       return;
     }
     extract_to_ = default_folder_;
     message_.clear();
+    REXLOG_INFO("ncaabb10: disc setup from {} into {}", iso.string(), extract_to_.string());
+    extract_start_ = std::chrono::steady_clock::now();
     extractor_ = std::make_unique<DiscExtractor>();
-    extractor_->Start(chosen->front(), extract_to_);
+    extractor_->Start(iso, extract_to_);
   }
 
   void PickFolder() {
@@ -850,7 +901,7 @@ class LauncherDialog final : public rex::ui::DialogBase {
       message_is_error_ = true;
       return;
     }
-    folder_ = picked;
+    folder_ = picked.lexically_normal().make_preferred();
     Recheck();
     message_ = check_ == GameCheck::kOk ? "The game is set up. Press Play." : "";
     message_is_error_ = false;
@@ -864,6 +915,7 @@ class LauncherDialog final : public rex::ui::DialogBase {
   std::string message_;
   bool message_is_error_ = false;
   std::unique_ptr<DiscExtractor> extractor_;
+  std::chrono::steady_clock::time_point extract_start_;
   Result result_ = Result::kNone;
 };
 
