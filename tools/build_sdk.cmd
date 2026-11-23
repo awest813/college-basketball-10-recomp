@@ -18,5 +18,8 @@ cmake --preset win-amd64 -DREXGLUE_BUILD_TESTS=OFF ^
   -DCMAKE_CONFIGURATION_TYPES=Release -DCMAKE_DEFAULT_BUILD_TYPE=Release -DCMAKE_DEFAULT_CONFIGS=Release ^
   -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ ^
   -DCMAKE_C_COMPILER_TARGET=x86_64-pc-windows-msvc -DCMAKE_CXX_COMPILER_TARGET=x86_64-pc-windows-msvc ^
-  -DCMAKE_LINKER_TYPE=MSVC || exit /b 1
+  -DCMAKE_LINKER_TYPE=MSVC ^
+  "-DCMAKE_C_FLAGS_RELEASE=-O3 -DNDEBUG -g -gcodeview" "-DCMAKE_CXX_FLAGS_RELEASE=-O3 -DNDEBUG -g -gcodeview" ^
+  "-DCMAKE_SHARED_LINKER_FLAGS_RELEASE=-Xlinker /DEBUG -Xlinker /OPT:REF -Xlinker /OPT:ICF" ^
+  "-DCMAKE_EXE_LINKER_FLAGS_RELEASE=-Xlinker /DEBUG -Xlinker /OPT:REF -Xlinker /OPT:ICF" || exit /b 1
 cmake --build out\build\win-amd64 --config Release --target install --parallel %JOBS%

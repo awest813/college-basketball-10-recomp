@@ -117,13 +117,31 @@ class Ncaabb10App : public rex::app::TitleApp {
   // command line still override them.
   rex::Result<void> OnConfigure(rex::SettingsRegistry& settings) override {
     REX_TRY_VOID(TitleApp::OnConfigure(settings));
-    // The SDK picks the ROV render target path on Intel GPUs. With it this game runs at 12-20 fps
-    // in game on an Arc A750 (GPU 3D engine 93% busy); with host render targets (RTV) it holds
-    // about 60 fps and renders the same.
-    if (auto set = settings.SetText(rex::SettingLayer::kTitle, "gpu.d3d12.render_target_path", "rtv");
-        !set) {
-      REXLOG_WARN("ncaabb10: could not default the render target path: {}",
-                  set.error().GetDescription());
+    struct Default {
+      const char* name;
+      const char* value;
+    };
+    static constexpr Default kDefaults[] = {
+        // The SDK picks the ROV render target path on Intel GPUs. With it this game runs at
+        // 12-20 fps in game on an Arc A750 (GPU 3D engine 93% busy); with host render targets
+        // (RTV) it holds about 60 fps and renders the same.
+        {"gpu.d3d12.render_target_path", "rtv"},
+        // The SDK forces 4x anisotropic filtering on every mipmapped texture. The title's own
+        // filtering is what the console did and costs less GPU time; live play holds 60 fps
+        // (p95 17.6 ms) with it. Raise it for sharper floors at grazing angles.
+        {"gpu.anisotropic_override", "-1"},
+        // The title paces itself on the SDK's emulated 60 Hz vblank. Waiting for the display's
+        // vsync as well ties the command processor to a second 60 Hz clock; when the two drift
+        // into phase a present blocks and the title misses a vblank (live play: 12 of 24 windows
+        // at a clean 60 with vsync, 22 of 24 without). Present without waiting, and without
+        // tearing: the flip model swap chain shows the newest frame on the display's refresh.
+        {"gpu.vsync", "false"},
+        {"gpu.d3d12.allow_tearing", "false"},
+    };
+    for (const Default& d : kDefaults) {
+      if (auto set = settings.SetText(rex::SettingLayer::kTitle, d.name, d.value); !set) {
+        REXLOG_WARN("ncaabb10: could not default {}: {}", d.name, set.error().GetDescription());
+      }
     }
     return rex::Ok();
   }

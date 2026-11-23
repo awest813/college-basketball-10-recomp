@@ -1,4 +1,4 @@
-// ncaabb10 - a small sampling profiler (Windows). With NCAABB10_PROFILE=1, 100 times a second it
+﻿// ncaabb10 - a small sampling profiler (Windows). With NCAABB10_PROFILE=1, 100 times a second it
 // suspends each thread that used CPU since the last tick, reads its instruction pointer, resumes
 // it and credits the cycles the thread used to that location. Every 10 seconds it logs the busiest recompiled guest functions overall and for
 // the three busiest threads. Addresses in the recompiled code section resolve to sub_XXXXXXXX
@@ -18,8 +18,11 @@
 #include <vector>
 
 #include <windows.h>
+#include <dbghelp.h>
 #include <psapi.h>
 #include <tlhelp32.h>
+
+#pragma comment(lib, "dbghelp.lib")
 
 #include <rex/logging/log_category.h>
 #include <rex/ppc/recompiled_code.h>
@@ -46,6 +49,8 @@ class Sampler {
  public:
   void Run() {
     BuildFunctionTable();
+    SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS);
+    symbols_ = SymInitialize(GetCurrentProcess(), nullptr, TRUE) != FALSE;
     REXLOG_INFO("ncaabb10: sampler on, {} guest functions, code {:#x}-{:#x}", functions_.size(),
                 code_begin_, code_end_);
     const DWORD self = GetCurrentThreadId();
@@ -109,12 +114,34 @@ class Sampler {
   }
 
   // A guest address for recompiled code, otherwise the module base with the low bit set.
-  uint64_t Key(uintptr_t rip) const {
+  static constexpr uint64_t kSymbolFlag = uint64_t(1) << 63;
+
+  uint64_t Key(uintptr_t rip) {
     if (rip >= code_begin_ && rip < code_end_) {
       auto it = std::upper_bound(functions_.begin(), functions_.end(), rip,
                                  [](uintptr_t value, const GuestFunction& f) { return value < f.host; });
       if (it != functions_.begin()) {
         return std::prev(it)->guest;
+      }
+    }
+    // A host function by its symbol (PDB or export), flagged with the top bit.
+    if (symbols_) {
+      alignas(SYMBOL_INFO) char buffer[sizeof(SYMBOL_INFO) + 256];
+      auto* symbol = reinterpret_cast<SYMBOL_INFO*>(buffer);
+      symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
+      symbol->MaxNameLen = 255;
+      DWORD64 displacement = 0;
+      if (SymFromAddr(GetCurrentProcess(), rip, &displacement, symbol)) {
+        const uint64_t key = symbol->Address | kSymbolFlag;
+        if (!symbol_names_.contains(key)) {
+          HMODULE module = nullptr;
+          GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                 GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                             reinterpret_cast<LPCWSTR>(rip), &module);
+          symbol_names_[key] = Name(reinterpret_cast<uint64_t>(module) | 1) + "!" +
+                               std::string(symbol->Name, symbol->NameLen);
+        }
+        return key;
       }
     }
     HMODULE module = nullptr;
@@ -124,6 +151,10 @@ class Sampler {
   }
 
   std::string Name(uint64_t key) {
+    if (key & kSymbolFlag) {
+      auto it = symbol_names_.find(key);
+      return it != symbol_names_.end() ? it->second : "<symbol>";
+    }
     if (!(key & 1)) {
       return std::format("sub_{:08X}", key);
     }
@@ -208,7 +239,7 @@ class Sampler {
       std::sort(busy.begin(), busy.end(), [](auto* a, auto* b) { return a->samples > b->samples; });
       for (size_t i = 0; i < busy.size() && i < 3; ++i) {
         REXLOG_INFO("ncaabb10: profile thread {} ({:.0f}% of total): {}", busy[i]->name,
-                    100.0 * busy[i]->samples / total, Top(busy[i]->hits, busy[i]->samples, 10));
+                    100.0 * busy[i]->samples / total, Top(busy[i]->hits, busy[i]->samples, 20));
       }
     }
     for (auto& [tid, slot] : threads_) {
@@ -218,6 +249,8 @@ class Sampler {
   }
 
   std::vector<GuestFunction> functions_;
+  bool symbols_ = false;
+  std::unordered_map<uint64_t, std::string> symbol_names_;
   uintptr_t code_begin_ = 0, code_end_ = 0;
   std::map<DWORD, ThreadSlot> threads_;
 };
@@ -238,3 +271,4 @@ const bool g_sampler_started = [] {
 }  // namespace
 
 #endif  // _WIN32
+

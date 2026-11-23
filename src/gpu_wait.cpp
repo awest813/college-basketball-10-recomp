@@ -18,6 +18,8 @@
 
 #include <rex/ppc/hook.h>
 
+#include "perf_counters.h"
+
 #if defined(_WIN32)
 #include <windows.h>
 #endif
@@ -88,6 +90,7 @@ REX_HOOK_RAW(sub_823E1148) {
       }
     } else {
       SleepMicroseconds(kSleepMicroseconds);
+      ncaabb10::perf::Get().gpu_waits.fetch_add(1, std::memory_order_relaxed);
     }
     state.last_poll = Clock::now();
   }

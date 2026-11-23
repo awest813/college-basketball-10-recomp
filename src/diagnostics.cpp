@@ -12,6 +12,8 @@
 #include <rex/ppc/hook.h>
 #include <rex/types.h>
 
+#include "perf_counters.h"
+
 #if defined(_WIN32)
 #include <windows.h>
 #include <psapi.h>
@@ -153,9 +155,7 @@ void TimedRead(const char* name, Func& original, PPCContext& ctx, uint8_t* base)
     original = Original(name);
     REXLOG_INFO("ncaabb10: {} hook active, original {}", name + 7, original ? "found" : "MISSING");
   }
-  if ((++g_reads % 2000) == 0) {
-    REXLOG_INFO("ncaabb10: {} reads so far", g_reads.load());
-  }
+  ++g_reads;
   const uint32_t handle = ctx.r3.u32, io_status = ctx.r7.u32, buffer = ctx.r8.u32,
                  length = ctx.r9.u32, offset_ptr = ctx.r10.u32;
   const uint64_t offset =
@@ -167,8 +167,12 @@ void TimedRead(const char* name, Func& original, PPCContext& ctx, uint8_t* base)
   const uint32_t status = ctx.r3.u32;
   const uint32_t io_result = io_status ? Load32(base, io_status) : 0;
   const uint32_t io_info = io_status ? Load32(base, io_status + 4) : 0;
+  auto& counters = ncaabb10::perf::Get();
+  counters.reads.fetch_add(1, std::memory_order_relaxed);
+  counters.read_bytes.fetch_add(io_status && status == 0 ? io_info : 0, std::memory_order_relaxed);
+  counters.read_micros.fetch_add(static_cast<uint64_t>(ms * 1000.0), std::memory_order_relaxed);
   const bool failed = (status != 0 && status != 0x103) || (io_status && io_result != 0 && io_result != 0x103);
-  if (failed || ms > 50.0 || (io_status && status == 0 && io_info != length)) {
+  if (failed || ms > 50.0) {
     REXLOG_WARN("ncaabb10: {} h={:08X} buf={:08X} len={:#x} off={:#x} -> {:08X} io=({:08X}, {:#x}) {:.1f} ms",
                 name + 7, handle, buffer, length, offset, status, io_result, io_info, ms);
   }

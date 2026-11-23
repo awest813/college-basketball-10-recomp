@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -14,6 +15,8 @@
 #include <rex/logging/log_category.h>
 #include <rex/ppc/hook.h>
 #include <rex/types.h>
+
+#include "perf_counters.h"
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -47,6 +50,30 @@ Func Original(const char* name) {
 #else
   return reinterpret_cast<Func>(dlsym(RTLD_NEXT, name));
 #endif
+}
+
+// Return addresses up the guest stack: functions save LR at (entry r1 - 8) and keep the back chain
+// at 0(r1), so a frame's LR is at (back chain - 8).
+std::string GuestStack(const uint8_t* base, uint32_t sp, uint32_t lr) {
+  auto load32 = [base](uint32_t address) {
+    uint32_t value;
+    std::memcpy(&value, base + address, sizeof(value));
+    return rex::byte_swap(value);
+  };
+  std::string out = std::format("{:08X}", lr);
+  for (int depth = 0; depth < 12 && sp >= 0x10000 && !(sp & 3); ++depth) {
+    const uint32_t back = load32(sp);
+    if (back <= sp || back - sp > 0x100000) {
+      break;
+    }
+    const uint32_t saved = load32(back - 8);
+    if (saved < 0x82000000 || saved >= 0x84000000) {
+      break;
+    }
+    out += std::format(" <- {:08X}", saved);
+    sp = back;
+  }
+  return out;
 }
 
 bool PerfEnabled() {
@@ -162,6 +189,9 @@ struct FrameStats {
     double window_cpu = ProcessCpuSeconds();
     TopThreads(1.0);  // Prime the per-thread baseline.
     std::vector<double> sorted;
+    auto& counters = ncaabb10::perf::Get();
+    uint64_t last_reads = 0, last_bytes = 0, last_read_us = 0, last_sleeps = 0, last_sleep_us = 0,
+             last_gpu_waits = 0;
     while (true) {
       std::this_thread::sleep_for(std::chrono::seconds(5));
       const auto now = Clock::now();
@@ -182,12 +212,23 @@ struct FrameStats {
         const size_t n = sorted.size();
         REXLOG_INFO(
             "ncaabb10: perf {:.1f} fps, frame avg {:.2f} ms p95 {:.2f} ms max {:.2f} ms, "
-            "{} frames over 33.4 ms, cpu {:.2f} cores",
+            "{} frames over 33.4 ms, cpu {:.2f} cores, {} frames over 17.5 ms",
             n / window_s, total / n, sorted[std::min(n - 1, n * 95 / 100)], sorted.back(),
             std::count_if(sorted.begin(), sorted.end(), [](double v) { return v > 33.4; }),
-            (cpu - window_cpu) / window_s);
+            (cpu - window_cpu) / window_s,
+            std::count_if(sorted.begin(), sorted.end(), [](double v) { return v > 17.5; }));
         REXLOG_INFO("ncaabb10: perf threads {}", threads);
       }
+      const uint64_t reads = counters.reads.load(), bytes = counters.read_bytes.load(),
+                     read_us = counters.read_micros.load(), sleeps = counters.sleeps.load(),
+                     sleep_us = counters.sleep_micros.load(), gpu_waits = counters.gpu_waits.load();
+      REXLOG_INFO(
+          "ncaabb10: perf io {} reads {:.1f} MB/s, {:.0f} ms reading; {} guest sleeps asking "
+          "{:.0f} ms; {} gpu wait sleeps",
+          reads - last_reads, (bytes - last_bytes) / window_s / 1e6, (read_us - last_read_us) / 1e3,
+          sleeps - last_sleeps, (sleep_us - last_sleep_us) / 1e3, gpu_waits - last_gpu_waits);
+      last_reads = reads, last_bytes = bytes, last_read_us = read_us, last_sleeps = sleeps,
+      last_sleep_us = sleep_us, last_gpu_waits = gpu_waits;
       window_start = now;
       window_cpu = cpu;
     }
@@ -197,6 +238,49 @@ struct FrameStats {
 FrameStats g_stats;
 
 }  // namespace
+
+// KeDelayExecutionThread(mode, alertable, LARGE_INTEGER* interval): the title's Sleep. Counted so
+// the perf log shows how much of a load is spent sleeping.
+REX_HOOK_RAW(__imp__KeDelayExecutionThread) {
+  static Func original = nullptr;
+  if (!original) {
+    original = Original("__imp__KeDelayExecutionThread");
+  }
+  if (PerfEnabled() && ctx.r5.u32) {
+    uint64_t raw;
+    std::memcpy(&raw, base + ctx.r5.u32, sizeof(raw));
+    const int64_t interval = static_cast<int64_t>(rex::byte_swap(raw));
+    auto& counters = ncaabb10::perf::Get();
+    const uint64_t n = counters.sleeps.fetch_add(1, std::memory_order_relaxed);
+    if (interval < 0) {  // Relative, in 100 ns units.
+      counters.sleep_micros.fetch_add(static_cast<uint64_t>(-interval / 10),
+                                      std::memory_order_relaxed);
+    }
+    // Zero length sleeps are yields; the loader thread spins on them while a load runs
+    // (sub_82275138 / sub_82275020). Log each spin episode's length: those are the loads.
+    if (interval == 0) {
+      thread_local Clock::time_point episode_start{}, episode_last{};
+      thread_local uint64_t episode_yields = 0;
+      const auto now = Clock::now();
+      if (now - episode_last > std::chrono::milliseconds(500)) {
+        const double seconds = std::chrono::duration<double>(episode_last - episode_start).count();
+        if (episode_yields > 10000 && seconds > 0.5) {
+          REXLOG_INFO("ncaabb10: perf load spin {:.2f} s, {} yields (thread {})", seconds,
+                      episode_yields, GetCurrentThreadId());
+        }
+        episode_start = now;
+        episode_yields = 0;
+      }
+      episode_last = now;
+      ++episode_yields;
+      if ((n % 4000000) == 0) {
+        REXLOG_INFO("ncaabb10: perf zero sleep #{} thread {} stack {}", n, GetCurrentThreadId(),
+                    GuestStack(base, ctx.r1.u32, ctx.lr));
+      }
+    }
+  }
+  original(ctx, base);
+}
 
 // VdSwap is the title's present: one call per guest frame.
 REX_HOOK_RAW(__imp__VdSwap) {
