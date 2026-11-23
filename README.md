@@ -19,11 +19,31 @@ Only this executable is supported (the analysis config is tied to it):
 | Version | `0.0.0.1` |
 | `default.xex` SHA-256 | `3201c28392f73af9c969a740181996e954d3c894a7117eb81f8ff50362de79ef` |
 
-Extract the disc into `assets/`:
+The launcher sets the game up for you: start `ncaabb10.exe`, choose **Set up from a disc image
+(.iso)** and it copies the game into `game/` next to the build's `user/` folder (about 7 GB), checks
+`default.xex` and enables Play. **Use an extracted folder** accepts a folder you extracted yourself
+(the folder with `default.xex`, or the one above it). For development, extracting into `assets/`
+works too:
 
 ```
 python -I tools/xiso.py extract "NCAA Basketball 10 (USA).iso" assets
 ```
+
+## Playing
+
+| Key | Launcher | In game |
+| --- | --- | --- |
+| Enter / pad A | Play | (game) |
+| Esc | Quit | (game) |
+| F1 | Options | Options |
+| F11, Alt+Enter | Fullscreen | Fullscreen |
+| F4 | All SDK settings | All SDK settings |
+
+Options (F1) covers display (fullscreen, aspect ratio, render scale), graphics (texture filtering,
+vsync, render path), audio (volume, mute) and controls (keyboard as pad, vibration, deadzones).
+Changes apply at once and are saved to `ncaabb10_options.toml` beside the executable; settings
+marked * apply after a restart. Untick "Show this launcher at startup" to go straight to the game;
+hold Shift while starting to see the launcher again.
 
 ## Building on Windows
 
@@ -46,7 +66,7 @@ full compile takes about 5 minutes on 14 jobs.
 
 ## Patched SDK (recommended for Release)
 
-Two patches fix races in SDK 0.11.0 that this game hits:
+Three patches fix SDK 0.11.0 bugs that this game hits:
 
 - `patches/rexglue-sdk-0.11.0-texture-watch-race.patch`: the texture cache could stop watching a
   texture the CPU was still filling, leaving the broadcast text (score bar, lineups, rankings)
@@ -54,6 +74,9 @@ Two patches fix races in SDK 0.11.0 that this game hits:
 - `patches/rexglue-sdk-0.11.0-physical-heap-release-race.patch`: freeing physical memory on one
   thread could clear an allocation another thread had just made in the same pages; the game's
   next disc read into it failed and it froze on a dirty-disc error while loading a game.
+- `patches/rexglue-sdk-0.11.0-overlay-self-close.patch`: an overlay closed with its own Close
+  button or Esc stayed counted as visible, keeping its input block (the project's Options overlay
+  also works around this, so the stock SDK is fine for it).
 
 To build with them:
 
@@ -61,6 +84,7 @@ To build with them:
 git clone --branch v0.11.0 --recurse-submodules https://github.com/rexglue/rexglue-sdk.git ..\rexglue-sdk-src
 git -C ..\rexglue-sdk-src apply ..\ncaabb10-recomp\patches\rexglue-sdk-0.11.0-texture-watch-race.patch
 git -C ..\rexglue-sdk-src apply ..\ncaabb10-recomp\patches\rexglue-sdk-0.11.0-physical-heap-release-race.patch
+git -C ..\rexglue-sdk-src apply ..\ncaabb10-recomp\patches\rexglue-sdk-0.11.0-overlay-self-close.patch
 tools\build_vulkan_deps.cmd
 tools\build_sdk.cmd
 build_win.cmd release 12 win-amd64-patched
@@ -68,7 +92,7 @@ build_win.cmd release 12 win-amd64-patched
 
 `tools\build_vulkan_deps.cmd` needs `..\vulkan-deps` with Vulkan-Headers and Vulkan-Loader at
 `v1.4.363` and VulkanMemoryAllocator at `v3.3.0` (or set `VULKAN_SDK` to a LunarG SDK instead).
-The patched SDK is Release only, so use the stock preset for Debug builds (which still have both
+The patched SDK is Release only, so use the stock preset for Debug builds (which still have these
 bugs).
 
 `src/diagnostics.cpp` logs the game's disc-error callback and any failed or slow file read (with
@@ -104,6 +128,11 @@ window), and screenshots the game window with PrintWindow:
   -GameArgs "--title.game_root=$PWD\assets --ui.fullscreen=false --hid.mnk_mode=true" `
   -Steps "wait:36","key:RETURN","wait:10","shot:after_start"
 ```
+
+Steps also include `ui:<KEY>[+ALT]`, which pushes the key through the window's own event queue so
+it reaches the launcher and the F1/F11/Alt+Enter binds, and `winsize:<name>`. For example, the
+launcher check is
+`-Steps "wait:8","ui:F1","wait:2","ui:ESCAPE","wait:2","ui:RETURN","wait:30","shot:title"`.
 
 `tools/to_game.ps1 -Out <folder>` drives a Release build from boot into a Duke at North Carolina
 game and screenshots it (it needs a profile save with autosave on in the build's `user` folder).

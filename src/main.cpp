@@ -217,7 +217,6 @@ class Ncaabb10App : public rex::app::TitleApp {
       auto found = bindings.FindBySetting(name);
       REXLOG_INFO("ncaabb10: FindBySetting({}) = {}", name, found ? static_cast<int>(*found) : -1);
     }
-    StartInputFeed(GetInput());
     return TitleApp::OnTitleLaunch(title);
   }
 };
@@ -225,6 +224,7 @@ class Ncaabb10App : public rex::app::TitleApp {
 // Init, then the launcher until the player chooses Play, then the title.
 int GameMain(Ncaabb10App& app, const rex::CLIArgList& args) {
   if (app.Init(args)) {
+    StartInputFeed(app.GetInput());  // Test scripts drive the launcher too.
     ncaabb10::frontend::InstallUI(app);
     if (ncaabb10::frontend::RunLauncher(app) && app.LaunchTitle()) {
       app.Run();

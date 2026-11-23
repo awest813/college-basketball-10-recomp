@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -33,6 +34,9 @@
 
 #if defined(_WIN32)
 #include <windows.h>
+#include <shellapi.h>
+#else
+#include <SDL3/SDL_keyboard.h>
 #endif
 
 namespace ncaabb10::frontend {
@@ -315,6 +319,8 @@ class DiscExtractor {
   bool Running() const { return thread_.joinable() && !done_; }
   bool Done() const { return done_; }
   bool Failed() const { return failed_; }
+  uint64_t BytesDone() const { return bytes_done_; }
+  uint64_t BytesTotal() const { return bytes_total_; }
   float Progress() const {
     const uint64_t total = bytes_total_;
     return total ? static_cast<float>(static_cast<double>(bytes_done_) / total) : 0.0f;
@@ -449,7 +455,7 @@ class DiscExtractor {
         return Fail("Canceled.");
       }
       SetStatus(e.path);
-      const fs::path out_path = destination / fs::u8path(e.path);
+      const fs::path out_path = destination / fs::path(std::u8string(e.path.begin(), e.path.end()));
       std::error_code ec;
       fs::create_directories(out_path.parent_path(), ec);
       std::ofstream out(out_path, std::ios::binary | std::ios::trunc);
@@ -546,7 +552,7 @@ class OptionsDialog final : public rex::ui::DialogBase {
     ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
                             ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowSize(ImVec2(520, 0), ImGuiCond_Appearing);
-    bool open = true;
+    bool open = !ImGui::IsKeyPressed(ImGuiKey_Escape, false);  // Esc closes Options.
     if (ImGui::Begin("Options##ncaabb10", &open, ImGuiWindowFlags_NoCollapse)) {
       if (ImGui::CollapsingHeader("Display", ImGuiTreeNodeFlags_DefaultOpen)) {
         Checkbox("Fullscreen (Alt+Enter, F11)", "ui.fullscreen");
@@ -592,7 +598,7 @@ class OptionsDialog final : public rex::ui::DialogBase {
       }
       ImGui::Separator();
       ImGui::TextDisabled("Saved to %s. * applies after a restart.",
-                          REX_PATHS().config_file.Get().filename().string().c_str());
+                          OptionsFile().filename().string().c_str());
       if (ImGui::Button("All settings (F4)")) {
         ui_.ToggleOverlay("settings");
       }
@@ -602,7 +608,12 @@ class OptionsDialog final : public rex::ui::DialogBase {
       }
     }
     ImGui::End();
-    return open;
+    if (!open) {
+      // Close through the overlay registry rather than by returning false: the registry then
+      // releases the input block Options holds (SDK 0.11.0 keeps it after a self-close).
+      ui_.ShowOverlay("options", false);
+    }
+    return true;
   }
 
   bool WantsExclusiveInput() const override { return true; }
@@ -649,77 +660,119 @@ class LauncherDialog final : public rex::ui::DialogBase {
     if (extractor_ && extractor_->Done()) {
       extractor_->Join();
       if (extractor_->Failed()) {
-        message_ = extractor_->Status();
+        message_ = extractor_->Status() + " Your settings were not changed; you can try again.";
+        message_is_error_ = true;
       } else {
         folder_ = extract_to_;
         Recheck();
-        message_ = "The game is set up.";
+        message_ = "The game is set up. Press Play.";
+        message_is_error_ = false;
       }
       extractor_.reset();
     }
 
+    const ImVec4 kGood(0.45f, 0.9f, 0.45f, 1), kWarn(1, 0.65f, 0.3f, 1);
     ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
                             ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(ImVec2(560, 0), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(640, 0), ImGuiCond_Always);
     ImGui::Begin("NCAA Basketball 10##launcher", nullptr,
                  ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                      ImGuiWindowFlags_NoSavedSettings);
-    ImGui::TextUnformatted("NCAA Basketball 10 - PC port (ReXGlue recompilation)");
+    ImGui::TextUnformatted("NCAA Basketball 10");
+    ImGui::SameLine();
+    ImGui::TextDisabled("PC port, recompiled with ReXGlue  |  built %s", __DATE__);
     ImGui::Separator();
+    ImGui::Spacing();
 
     if (extractor_) {
-      ImGui::TextUnformatted("Copying the game from the disc image...");
+      ImGui::TextUnformatted("Copying the game from your disc image...");
       ImGui::ProgressBar(extractor_->Progress(), ImVec2(-1, 0));
-      ImGui::TextDisabled("%s", extractor_->Status().c_str());
-      if (ImGui::Button("Cancel")) {
+      ImGui::TextDisabled("%.0f of %.0f MB   %s", extractor_->BytesDone() / 1048576.0,
+                          extractor_->BytesTotal() / 1048576.0, extractor_->Status().c_str());
+      ImGui::TextDisabled("Into %s", extract_to_.string().c_str());
+      if (ImGui::Button("Cancel", ImVec2(110, 0))) {
         extractor_->Cancel();
       }
-    } else {
-      switch (check_) {
-        case GameCheck::kOk:
-          ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.4f, 1), "Game files found and verified");
-          break;
-        case GameCheck::kWrongVersion:
-          ImGui::TextColored(ImVec4(1, 0.6f, 0.3f, 1),
-                             "These game files are a different version (need the USA disc)");
-          break;
-        case GameCheck::kMissing:
-          ImGui::TextColored(ImVec4(1, 0.6f, 0.3f, 1), "The game is not set up yet");
-          break;
-      }
-      ImGui::TextDisabled("%s", folder_.empty() ? "(no folder)" : folder_.string().c_str());
-      if (!message_.empty()) {
-        ImGui::TextWrapped("%s", message_.c_str());
-      }
-      ImGui::Spacing();
+      ImGui::End();
+      return true;
+    }
 
-      ImGui::BeginDisabled(check_ != GameCheck::kOk);
-      if (ImGui::Button("Play", ImVec2(160, 40))) {
-        result_ = Result::kPlay;
-      }
-      ImGui::EndDisabled();
-      ImGui::SameLine();
-      if (ImGui::Button("Options", ImVec2(110, 40))) {
-        ui_.ToggleOverlay("options");
-      }
-      ImGui::SameLine();
-      if (ImGui::Button("Quit", ImVec2(110, 40))) {
-        result_ = Result::kQuit;
-      }
-      ImGui::Spacing();
-      ImGui::Separator();
-      ImGui::TextUnformatted("Set up the game from your own disc:");
-      if (ImGui::Button("Disc image (.iso)...")) {
-        PickIso();
-      }
-      ImGui::SameLine();
-      if (ImGui::Button("Extracted folder...")) {
-        PickFolder();
-      }
-      bool show = Settings().show_launcher.Get();
-      if (ImGui::Checkbox("Show this launcher at startup (hold Shift to show it anyway)", &show)) {
-        SetAndSave("ncaabb10.show_launcher", show ? "true" : "false");
-      }
+    switch (check_) {
+      case GameCheck::kOk:
+        ImGui::TextColored(kGood, "Ready to play: game files found and verified.");
+        break;
+      case GameCheck::kWrongVersion:
+        ImGui::TextColored(kWarn, "These game files are a different version. This port needs the");
+        ImGui::TextColored(kWarn, "USA disc (Title ID 454108C3) without a title update.");
+        break;
+      case GameCheck::kMissing:
+        ImGui::TextColored(kWarn, "The game is not set up yet. Choose your disc image below.");
+        break;
+    }
+    ImGui::TextDisabled("Game folder: %s", folder_.empty() ? "(none)" : folder_.string().c_str());
+    if (!message_.empty()) {
+      ImGui::PushStyleColor(ImGuiCol_Text, message_is_error_ ? kWarn : kGood);
+      ImGui::TextWrapped("%s", message_.c_str());
+      ImGui::PopStyleColor();
+    }
+    ImGui::Spacing();
+
+    // Enter or the controller's A plays, Esc quits, so no mouse is needed. Not with Alt held
+    // (Alt+Enter toggles fullscreen), and not while another window (Options, the F4 settings)
+    // has focus over the launcher: Esc there closes that window instead.
+    const bool keys = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) ||
+                      !ImGui::IsWindowFocused(ImGuiFocusedFlags_AnyWindow);
+    const bool ok = check_ == GameCheck::kOk;
+    const bool play_key = keys && ((!io.KeyAlt && (ImGui::IsKeyPressed(ImGuiKey_Enter, false) ||
+                                                   ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false))) ||
+                                   ImGui::IsKeyPressed(ImGuiKey_GamepadFaceDown, false));
+    if (keys && ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+      result_ = Result::kQuit;
+    }
+    ImGui::BeginDisabled(!ok);
+    if (ImGui::Button("Play", ImVec2(200, 44)) || (play_key && ok)) {
+      REXLOG_INFO("ncaabb10: launcher Play ({}; enter {} keypad {} pad A {} alt {})",
+                  play_key ? "key" : "button", ImGui::IsKeyDown(ImGuiKey_Enter),
+                  ImGui::IsKeyDown(ImGuiKey_KeypadEnter), ImGui::IsKeyDown(ImGuiKey_GamepadFaceDown),
+                  io.KeyAlt);
+      result_ = Result::kPlay;
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (ImGui::Button("Options", ImVec2(130, 44))) {
+      ui_.ToggleOverlay("options");
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Quit", ImVec2(130, 44))) {
+      result_ = Result::kQuit;
+    }
+    ImGui::TextDisabled("Enter / A: Play    Esc: Quit    F1: Options    F11 / Alt+Enter: Fullscreen");
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::TextUnformatted("Game files, from your own disc");
+    if (ImGui::Button("Set up from a disc image (.iso)...")) {
+      PickIso();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Use an extracted folder...")) {
+      PickFolder();
+    }
+    ImGui::SameLine();
+    ImGui::BeginDisabled(folder_.empty());
+    if (ImGui::Button("Open folder")) {
+      OpenFolder(folder_);
+    }
+    ImGui::EndDisabled();
+
+    ImGui::Spacing();
+    bool show = Settings().show_launcher.Get();
+    if (ImGui::Checkbox("Show this launcher at startup", &show)) {
+      SetAndSave("ncaabb10.show_launcher", show ? "true" : "false");
+    }
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("When off, the game starts directly. Hold Shift while starting to see "
+                        "the launcher again.");
     }
     ImGui::End();
     return result_ == Result::kNone;
@@ -729,6 +782,17 @@ class LauncherDialog final : public rex::ui::DialogBase {
 
  private:
   void Recheck() { check_ = CheckGameFolder(folder_); }
+
+  static void OpenFolder(const fs::path& folder) {
+#if defined(_WIN32)
+    ShellExecuteW(nullptr, L"open", folder.wstring().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+#else
+    const std::string command = "xdg-open '" + folder.string() + "' >/dev/null 2>&1 &";
+    if (folder.string().find('\'') == std::string::npos) {
+      (void)std::system(command.c_str());
+    }
+#endif
+  }
 
   void PickIso() {
     rex::ui::FileDialogConfig config;
@@ -740,9 +804,17 @@ class LauncherDialog final : public rex::ui::DialogBase {
       return;
     }
     std::error_code ec;
-    const auto space = fs::space(default_folder_.parent_path(), ec);
+    fs::create_directories(default_folder_, ec);
+    const auto space = fs::space(fs::exists(default_folder_, ec) ? default_folder_
+                                                                 : default_folder_.parent_path(),
+                                 ec);
     if (!ec && space.available < (uint64_t(7) << 30)) {
-      message_ = "About 6 GB of free space is needed next to the game for the copied files.";
+      char text[512];
+      std::snprintf(text, sizeof(text),
+                    "About 7 GB of free space is needed for the copied game in %s (%.1f GB free).",
+                    default_folder_.string().c_str(), space.available / 1073741824.0);
+      message_ = text;
+      message_is_error_ = true;
       return;
     }
     extract_to_ = default_folder_;
@@ -754,14 +826,34 @@ class LauncherDialog final : public rex::ui::DialogBase {
   void PickFolder() {
     rex::ui::FileDialogConfig config;
     config.mode = rex::ui::FileDialogConfig::Mode::kOpenFolder;
-    config.title = "Choose the folder with default.xex";
+    config.title = "Choose the folder that holds default.xex";
     auto chosen = ui_.ShowFileDialog(config);
     if (!chosen || chosen->empty()) {
       return;
     }
-    folder_ = chosen->front();
+    fs::path picked = chosen->front();
+    // Accept the folder that holds default.xex, or a folder one level above it.
+    if (CheckGameFolder(picked) == GameCheck::kMissing) {
+      std::error_code ec;
+      for (const auto& child : fs::directory_iterator(picked, ec)) {
+        std::error_code child_ec;
+        if (child.is_directory(child_ec) && fs::is_regular_file(child.path() / "default.xex", child_ec)) {
+          picked = child.path();
+          break;
+        }
+      }
+    }
+    const GameCheck check = CheckGameFolder(picked);
+    if (check == GameCheck::kMissing) {
+      message_ = "No default.xex in " + chosen->front().string() +
+                 ". Choose the folder the disc was extracted into.";
+      message_is_error_ = true;
+      return;
+    }
+    folder_ = picked;
     Recheck();
-    message_ = check_ == GameCheck::kOk ? "The game is set up." : "";
+    message_ = check_ == GameCheck::kOk ? "The game is set up. Press Play." : "";
+    message_is_error_ = false;
   }
 
   rex::ui::IUISystem& ui_;
@@ -770,6 +862,7 @@ class LauncherDialog final : public rex::ui::DialogBase {
   fs::path extract_to_;
   GameCheck check_ = GameCheck::kMissing;
   std::string message_;
+  bool message_is_error_ = false;
   std::unique_ptr<DiscExtractor> extractor_;
   Result result_ = Result::kNone;
 };
@@ -778,7 +871,7 @@ bool ShiftHeld() {
 #if defined(_WIN32)
   return (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
 #else
-  return false;
+  return (SDL_GetModState() & SDL_KMOD_SHIFT) != 0;
 #endif
 }
 
@@ -825,7 +918,10 @@ bool RunLauncher(rex::app::TitleApp& app) {
     }
   }
   const GameCheck check = CheckGameFolder(folder);
-  if (check == GameCheck::kOk && !Settings().show_launcher.Get() && !ShiftHeld()) {
+  const bool shift = ShiftHeld();
+  REXLOG_INFO("ncaabb10: launcher: game folder '{}' check {} show_launcher {} shift {}", folder.string(),
+              static_cast<int>(check), Settings().show_launcher.Get(), shift);
+  if (check == GameCheck::kOk && !Settings().show_launcher.Get() && !shift) {
     // This session only: Save would also persist command line values such as a test's flags.
     if (GetText("title.game_root") != folder.string() && g_registry) {
       (void)g_registry->SetText("title.game_root", folder.string());
@@ -845,6 +941,9 @@ bool RunLauncher(rex::app::TitleApp& app) {
   rex::ScopeGuard shown = app.GetUI().AddDialog(*view);
   while (view->result() == LauncherDialog::Result::kNone && app.RunFrame()) {
   }
+  REXLOG_INFO("ncaabb10: launcher closed: {}", view->result() == LauncherDialog::Result::kPlay   ? "play"
+                                                  : view->result() == LauncherDialog::Result::kQuit ? "quit"
+                                                                                                   : "window closed");
   if (view->result() != LauncherDialog::Result::kPlay) {
     return false;
   }

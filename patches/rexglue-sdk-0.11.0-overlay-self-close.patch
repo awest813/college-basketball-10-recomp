@@ -1,0 +1,42 @@
+diff --git a/src/ui/imgui_host.cpp b/src/ui/imgui_host.cpp
+index c05cc8a..ec418e1 100644
+--- a/src/ui/imgui_host.cpp
++++ b/src/ui/imgui_host.cpp
+@@ -378,6 +378,9 @@ ImDrawData* ImGuiHost::BuildFrame() {
+     if (!entry.dialog->Draw(ImGui::GetIO())) {
+       entry.dialog->OnClose();
+       RemoveDialog(*entry.dialog, entry.id);
++      if (hooks_.dialog_closed) {
++        hooks_.dialog_closed();
++      }
+     }
+   }
+   dialog_loop_next_index_ = SIZE_MAX;
+diff --git a/src/ui/imgui_host.h b/src/ui/imgui_host.h
+index c26b321..05dd8c1 100644
+--- a/src/ui/imgui_host.h
++++ b/src/ui/imgui_host.h
+@@ -36,6 +36,9 @@ class ImGuiHost final {
+     MoveOnlyFunction<void(bool)> set_mouse_capture;
+     MoveOnlyFunction<std::string()> get_clipboard;
+     MoveOnlyFunction<void(std::string_view)> set_clipboard;
++    // Called after a dialog closed itself (its Draw returned false), so owners that track which
++    // dialogs are shown, such as the overlay registry's input block, can update.
++    MoveOnlyFunction<void()> dialog_closed;
+   };
+ 
+   explicit ImGuiHost(Hooks hooks);
+diff --git a/src/ui/ui_system.cpp b/src/ui/ui_system.cpp
+index d2012a7..9406769 100644
+--- a/src/ui/ui_system.cpp
++++ b/src/ui/ui_system.cpp
+@@ -242,6 +242,9 @@ void UISystem::State::CreateImGui() {
+   hooks.set_mouse_capture = [this](bool captured) { driver->CaptureMouse(captured); };
+   hooks.get_clipboard = [this] { return driver->GetClipboardText(); };
+   hooks.set_clipboard = [this](std::string_view text) { driver->SetClipboardText(text); };
++  // An overlay that closes itself (Esc, its Close button) leaves the registry without a Show
++  // call: re-sync the visible count and the input block, or game input stays blocked.
++  hooks.dialog_closed = [this] { SyncOverlayBlock(); };
+   imgui = std::make_unique<ui::ImGuiHost>(std::move(hooks));
+   imgui->SetDialogCounter(&dialog_count);
+   imgui->SetDisplay(window_width, window_height, content_scale);
