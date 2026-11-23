@@ -1,0 +1,91 @@
+diff --git a/include/rex/kernel/kernel_settings.h b/include/rex/kernel/kernel_settings.h
+index bed2922..2252d2a 100644
+--- a/include/rex/kernel/kernel_settings.h
++++ b/include/rex/kernel/kernel_settings.h
+@@ -24,6 +24,8 @@ class REX_KERNEL_API KernelSettings final : public SettingOwner {
+   REX_SETTING(u32, user_language, 1, "XLanguage ID, 0 follows the host language", kUntilLaunch);
+   REX_SETTING(u32, user_country, 103, "Console country code", kUntilLaunch);
+   REX_SETTING(u32, license_mask, 0, "Content license mask", kUntilLaunch);
++  REX_SETTING(std::string, gamertag, "User",
++              "Name of the signed in profile, up to 15 characters", kUntilLaunch);
+   REX_SETTING(std::string, command_line, "", "Arguments the title sees after default.xex",
+               kUntilLaunch);
+ 
+diff --git a/src/xam/user_profile.cpp b/src/xam/user_profile.cpp
+index 96c4454..a47997b 100644
+--- a/src/xam/user_profile.cpp
++++ b/src/xam/user_profile.cpp
+@@ -18,12 +18,24 @@
+ #include <rex/xam/content_manager.h>
+ #include <rex/xam/user_profile.h>
+ 
++#include "xam/xam_module.h"
++
+ namespace rex::xam {
+ 
+ UserProfile::UserProfile() {
+   // A title rejects any XUID with bits 54 or 55 set (mask 0x00C0000000000000).
+   xuid_ = 0xB13EBABEBABEBABE;
+   name_ = "User";
++  if (const auto* gamertag = GetXAMSettings().gamertag) {
++    // A gamertag is at most 15 characters; XUSER_SIGNIN_INFO holds 16 with the terminator.
++    std::string name = gamertag->Get();
++    const auto first = name.find_first_not_of(' ');
++    name = first == std::string::npos ? std::string() : name.substr(first, 15);
++    name.erase(name.find_last_not_of(' ') + 1);
++    if (!name.empty()) {
++      name_ = std::move(name);
++    }
++  }
+ 
+   // XPROFILE_GAMER_YAXIS_INVERSION
+   AddSetting(std::make_unique<Int32Setting>(0x10040002, 0));
+diff --git a/src/xam/xam_content_device.cpp b/src/xam/xam_content_device.cpp
+index 0019729..d4d9ed9 100644
+--- a/src/xam/xam_content_device.cpp
++++ b/src/xam/xam_content_device.cpp
+@@ -36,14 +36,14 @@ static const rex::xam::PlaceholderDevice kDummyHDDDeviceInfo = {
+     rex::xam::DeviceType::kHDD,
+     20ull * kOneGB,
+     3ull * kOneGB,
+-    u"Dummy HDD",
++    u"Hard Drive",
+ };
+ static const rex::xam::PlaceholderDevice kDummyODDDeviceInfo = {
+     rex::xam::DummyDeviceID::kODD,
+     rex::xam::DeviceType::kODD,
+     7ull * kOneGB,
+     0ull * kOneGB,
+-    u"Dummy ODD",
++    u"Disc Drive",
+ };
+ static const rex::xam::PlaceholderDevice* g_dummy_device_infos[] = {
+     &kDummyHDDDeviceInfo,
+diff --git a/src/xam/xam_module.cpp b/src/xam/xam_module.cpp
+index 6d0f5fa..67a2602 100644
+--- a/src/xam/xam_module.cpp
++++ b/src/xam/xam_module.cpp
+@@ -87,6 +87,11 @@ Result<void> XAMModule::Init() {
+     return Err(license_mask.error());
+   }
+   found.license_mask = *license_mask;
++  auto gamertag = FindSetting<std::string>(*settings_, "kernel.gamertag");
++  if (!gamertag) {
++    return Err(gamertag.error());
++  }
++  found.gamertag = *gamertag;
+   g_settings = found;
+   return {};
+ }
+diff --git a/src/xam/xam_module.h b/src/xam/xam_module.h
+index 9605f0c..97aeb88 100644
+--- a/src/xam/xam_module.h
++++ b/src/xam/xam_module.h
+@@ -34,6 +34,7 @@ struct XAMSettings {
+   Setting<bool>* headless = nullptr;    /**< System dialogs answer at once without showing. */
+   Setting<u32>* user_country = nullptr; /**< Console country code. */
+   Setting<u32>* license_mask = nullptr; /**< Content license mask. */
++  Setting<std::string>* gamertag = nullptr; /**< Name of the signed in profile. */
+ };
+ 
+ /** Returns the settings the XAM exports read. */

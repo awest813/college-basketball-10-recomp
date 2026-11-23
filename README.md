@@ -67,9 +67,26 @@ The keyboard is also player 1's controller, alongside any pad (Options, "Keyboar
 | F, K | Left, right stick press |
 
 Options (F1) covers display (fullscreen, aspect ratio, render scale), graphics (texture filtering,
-vsync, render path), audio (volume, mute) and controls (keyboard as pad, vibration, deadzones).
-Changes apply at once and are saved to `ncaabb10_options.toml` beside the executable; settings
-marked * apply after a restart. Untick "Show this launcher at startup" to go straight to the game;
+vsync, render path), audio (volume, mute), controls (keyboard as pad, vibration, deadzones) and
+the player name (patched SDK) the game shows on its menus and save screens. Changes apply at once
+and are saved to `ncaabb10_options.toml` beside the executable; settings marked * apply after a
+restart (the player name applies on Play when changed from the launcher).
+
+### Saves
+
+The game saves through its own My NCAA > Load/Save screens and autosaves the profile when you
+leave a settings screen. Everything goes under the build's `user/` folder:
+`user/B13EBABEBABEBABE/454108C3/00000001/` holds one folder per save (`USERPROFILE_0 <date>`,
+`ROSTERS_0 ..`, `DYNASTY_0 ..`), with the headers the save lists show in `Headers/`. Saves belong
+to the profile's ID, not its name, so renaming the player keeps them. Checked: saving, overwriting,
+loading and deleting the profile, a roster set and a Dynasty; the profile autosave; and loading a
+Dynasty back to the same week. Online menus (Xbox Live, Dynamic Update Hub, ESPN on demand) say
+you must be signed in to Xbox Live, as the console does offline.
+
+Known issue: after quitting a Dynasty, the idle practice court behind the main menu sometimes goes
+black for 5 to 10 seconds at a time (press Start for the menu as usual). It does not happen every
+time; full readback, the accurate render path and `direct_host_resolve=false` each ran clean once,
+but so did the default on a retry, so the cause is not pinned down. Untick "Show this launcher at startup" to go straight to the game;
 hold Shift while starting to see the launcher again.
 
 ## Building on Windows
@@ -84,7 +101,7 @@ build_win.cmd release
 run_win.cmd release
 ```
 
-Saves go to `out/build/win-amd64/<config>/user/`; the console's utility
+Saves go to `out/build/win-amd64/<config>/user/` (see Saves above); the console's utility
 drive (`cache:`) is backed by `user/cache/`.
 
 Codegen runs as part of the build (about 2 minutes, 50k functions, ~270 MB of C++); the first
@@ -92,7 +109,7 @@ full compile takes about 5 minutes on 14 jobs.
 
 ## Patched SDK (recommended for Release)
 
-Three patches fix SDK 0.11.0 bugs that this game hits:
+Four patches fix SDK 0.11.0 bugs that this game hits:
 
 - `patches/rexglue-sdk-0.11.0-texture-watch-race.patch`: the texture cache could stop watching a
   texture the CPU was still filling, leaving the broadcast text (score bar, lineups, rankings)
@@ -103,6 +120,9 @@ Three patches fix SDK 0.11.0 bugs that this game hits:
 - `patches/rexglue-sdk-0.11.0-overlay-self-close.patch`: an overlay closed with its own Close
   button or Esc stayed counted as visible, keeping its input block (the project's Options overlay
   also works around this, so the stock SDK is fine for it).
+- `patches/rexglue-sdk-0.11.0-profile-name.patch`: the profile was always named "User" and the
+  storage device "Dummy HDD" on the game's menus and save screens. Adds `kernel.gamertag` (the
+  project sets "Player"; Options changes it) and names the drives Hard Drive and Disc Drive.
 
 To build with them:
 
@@ -111,6 +131,7 @@ git clone --branch v0.11.0 --recurse-submodules https://github.com/rexglue/rexgl
 git -C ..\rexglue-sdk-src apply ..\ncaabb10-recomp\patches\rexglue-sdk-0.11.0-texture-watch-race.patch
 git -C ..\rexglue-sdk-src apply ..\ncaabb10-recomp\patches\rexglue-sdk-0.11.0-physical-heap-release-race.patch
 git -C ..\rexglue-sdk-src apply ..\ncaabb10-recomp\patches\rexglue-sdk-0.11.0-overlay-self-close.patch
+git -C ..\rexglue-sdk-src apply ..\ncaabb10-recomp\patches\rexglue-sdk-0.11.0-profile-name.patch
 tools\build_vulkan_deps.cmd
 tools\build_sdk.cmd
 build_win.cmd release 12 win-amd64-patched
@@ -166,6 +187,7 @@ hold and release one, and `axis:<LX|LY|RX|RY|LT|RT>:<value>` sets a stick or tri
 `<BUTTON>@1` and `<AXIS>@1` (for example `pad:A@1`) drive a second controller, which the game
 sees as player 2, and `unplug:<0|1>` pulls one out; its next step plugs it back in. The log
 records the vibration the game sends to each (`test controller 0 rumble low .. high ..`).
+`text:<text>` types into the focused text field (Options' player name).
 
 Steps also include `ui:<KEY>[+ALT]`, which pushes the key through the window's own event queue so
 it reaches the launcher and the F1/F11/Alt+Enter binds, and `winsize:<name>`. For example, the

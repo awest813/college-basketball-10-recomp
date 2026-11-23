@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -88,6 +89,9 @@ std::string GetText(std::string_view name) {
 // changed through the launcher or Options, so project defaults keep applying to everything else
 // (the SDK's Save writes every non-default value, command line ones included).
 std::set<std::string> g_user_settings;
+// Values for settings that can no longer change in this run (kUntilLaunch ones once the title
+// runs): saved to the file now, applied on the next start.
+std::map<std::string, std::string> g_next_start;
 
 fs::path OptionsFile() {
   return REX_PATHS().config_file.Get().parent_path() / "ncaabb10_options.toml";
@@ -104,7 +108,8 @@ void Save() {
       continue;
     }
     const size_t dot = name.rfind('.');
-    std::string text = (*found)->GetText();
+    const auto next = g_next_start.find(name);
+    std::string text = next != g_next_start.end() ? next->second : (*found)->GetText();
     switch ((*found)->GetType()) {
       case rex::SettingType::kBool:
       case rex::SettingType::kI32:
@@ -171,6 +176,14 @@ void SetAndSave(std::string_view name, std::string_view text) {
   if (!g_registry) {
     return;
   }
+  auto found = g_registry->Find(name);
+  if (found && (*found)->IsFrozen() && (*found)->Check(text)) {
+    REXLOG_INFO("ncaabb10: option {} = {} (on the next start)", name, text);
+    g_next_start[std::string(name)] = std::string(text);
+    g_user_settings.insert(std::string(name));
+    Save();
+    return;
+  }
   if (auto set = g_registry->SetText(name, text); !set) {
     REXLOG_WARN("ncaabb10: setting {}={} failed: {}", name, text, set.error().GetDescription());
     return;
@@ -181,6 +194,12 @@ void SetAndSave(std::string_view name, std::string_view text) {
 }
 
 bool GetBool(std::string_view name) { return GetText(name) == "true"; }
+
+// The player name, including a change waiting for the next start.
+std::string GetGamertag() {
+  const auto next = g_next_start.find("kernel.gamertag");
+  return next != g_next_start.end() ? next->second : GetText("kernel.gamertag");
+}
 
 double GetDouble(std::string_view name, double fallback) {
   const std::string text = GetText(name);
@@ -765,7 +784,10 @@ class OptionsDialog final : public rex::ui::DialogBase {
  public:
   explicit OptionsDialog(rex::ui::IUISystem& ui) : ui_(ui) {}
 
-  void OnShow() override { busy_ = true; }  // Ignore a B still held from the game.
+  void OnShow() override {
+    busy_ = true;  // Ignore a B still held from the game.
+    std::snprintf(gamertag_, sizeof(gamertag_), "%s", GetGamertag().c_str());
+  }
 
   bool Draw(ImGuiIO& io) override {
     FeedGamepads(io);
@@ -825,6 +847,34 @@ class OptionsDialog final : public rex::ui::DialogBase {
         Slider("Left stick deadzone", "hid.left_stick_deadzone", 0.0f, 0.5f, "%.2f");
         Slider("Right stick deadzone", "hid.right_stick_deadzone", 0.0f, 0.5f, "%.2f");
       }
+      if (g_registry && g_registry->Find("kernel.gamertag") &&
+          ImGui::CollapsingHeader("Profile", ImGuiTreeNodeFlags_DefaultOpen)) {
+        // The name the game shows on its menus and save screens, as a gamertag would be. Letters,
+        // digits and spaces: the game's fonts have them all.
+        ImGui::InputText("Player name *", gamertag_, sizeof(gamertag_),
+                         ImGuiInputTextFlags_CallbackCharFilter,
+                         [](ImGuiInputTextCallbackData* data) {
+                           const ImWchar c = data->EventChar;
+                           return (c < 128 && (std::isalnum(static_cast<int>(c)) || c == ' ')) ? 0 : 1;
+                         });
+        // A on a controller starts typing (ImGui's own way is Y, which the menus leave out).
+        if (ImGui::IsItemFocused() && !ImGui::IsItemActive() &&
+            ImGui::IsKeyPressed(ImGuiKey_GamepadFaceDown, false)) {
+          ImGui::SetKeyboardFocusHere(-1);
+        }
+        if (ImGui::IsItemDeactivatedAfterEdit()) {
+          std::string name = gamertag_;
+          name.erase(0, name.find_first_not_of(' '));
+          name.erase(name.find_last_not_of(' ') + 1);
+          SetAndSave("kernel.gamertag", name.empty() ? "Player" : name);
+          std::snprintf(gamertag_, sizeof(gamertag_), "%s", GetGamertag().c_str());
+        }
+        if (ImGui::IsItemHovered()) {
+          ImGui::SetTooltip("Shown on the game's menus and save screens. Up to 15 letters, digits\n"
+                            "and spaces. Takes effect when the game starts; once it runs, on the\n"
+                            "next start.");
+        }
+      }
       if (ImGui::CollapsingHeader("Launcher")) {
         bool show = Settings().show_launcher.Get();
         if (ImGui::Checkbox("Show the launcher at startup", &show)) {
@@ -859,6 +909,7 @@ class OptionsDialog final : public rex::ui::DialogBase {
  private:
   rex::ui::IUISystem& ui_;
   bool busy_ = true;
+  char gamertag_[16] = {};  // A gamertag is at most 15 characters.
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -1162,6 +1213,12 @@ class LauncherDialog final : public rex::ui::DialogBase {
   Result result_ = Result::kNone;
 };
 
+// Paths compare by their parts: the setting renders with forward slashes, the launcher's folder
+// with the platform's own.
+bool SamePath(const fs::path& a, const fs::path& b) {
+  return a.lexically_normal() == b.lexically_normal();
+}
+
 bool ShiftHeld() {
 #if defined(_WIN32)
   return (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
@@ -1221,7 +1278,7 @@ bool RunLauncher(rex::app::TitleApp& app) {
               static_cast<int>(check), Settings().show_launcher.Get(), shift);
   if (check == GameCheck::kOk && !Settings().show_launcher.Get() && !shift) {
     // This session only: Save would also persist command line values such as a test's flags.
-    if (GetText("title.game_root") != folder.string() && g_registry) {
+    if (!SamePath(GetText("title.game_root"), folder) && g_registry) {
       (void)g_registry->SetText("title.game_root", folder.string());
     }
     return true;
@@ -1245,7 +1302,7 @@ bool RunLauncher(rex::app::TitleApp& app) {
   if (view->result() != LauncherDialog::Result::kPlay) {
     return false;
   }
-  if (GetText("title.game_root") != view->folder().string()) {
+  if (!SamePath(GetText("title.game_root"), view->folder())) {
     SetAndSave("title.game_root", view->folder().string());
   }
   return true;

@@ -19,6 +19,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -180,6 +181,23 @@ void StartInputFeed(rex::hid::IInputSystem& input) {
       for (const auto& line : lines) {
         std::istringstream words(line);
         std::string verb;
+        if (line.starts_with("text ")) {
+          // Typed text, as the window's text input would deliver it (ImGui text fields). The event
+          // points at its string, so keep each one alive.
+          static std::vector<std::unique_ptr<std::string>> texts;
+          texts.push_back(std::make_unique<std::string>(line.substr(5)));
+          SDL_Event event{};
+          event.type = SDL_EVENT_TEXT_INPUT;
+          int count = 0;
+          if (SDL_Window** windows = SDL_GetWindows(&count)) {
+            event.text.windowID = count > 0 ? SDL_GetWindowID(windows[0]) : 0;
+            SDL_free(windows);
+          }
+          event.text.text = texts.back()->c_str();
+          SDL_PushEvent(&event);
+          REXLOG_INFO("ncaabb10: input feed text '{}'", *texts.back());
+          continue;
+        }
         if (line.starts_with("unplug ")) {
           int slot = 0;
           if (words >> verb >> slot && slot >= 0 && slot < kTestPads) {
@@ -288,6 +306,11 @@ class Ncaabb10App : public rex::app::TitleApp {
       if (auto set = settings.SetText(rex::SettingLayer::kTitle, d.name, d.value); !set) {
         REXLOG_WARN("ncaabb10: could not default {}: {}", d.name, set.error().GetDescription());
       }
+    }
+    // The profile's name on the game's menus and save screens; Options changes it. The patched
+    // SDK has the setting (its default is "User"), the stock one always says "User".
+    if (settings.Find("kernel.gamertag")) {
+      (void)settings.SetText(rex::SettingLayer::kTitle, "kernel.gamertag", "Player");
     }
     // SDL knows most controllers itself. The community gamecontrollerdb.txt adds rarer ones when
     // a player puts it next to the exe; without it, skip the load instead of warning every start.
