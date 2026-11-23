@@ -32,13 +32,39 @@ python -I tools/xiso.py extract "NCAA Basketball 10 (USA).iso" assets
 
 ## Playing
 
-| Key | Launcher | In game |
-| --- | --- | --- |
-| Enter / pad A | Play | (game) |
-| Esc | Quit | (game) |
-| F1 | Options | Options |
-| F11, Alt+Enter | Fullscreen | Fullscreen |
-| F4 | All SDK settings | All SDK settings |
+| Key | Controller | Launcher | In game |
+| --- | --- | --- | --- |
+| Enter | A | Play (or the highlighted button) | (game) |
+| | D-pad, left stick | Move between buttons | (game) |
+| Esc | | Quit | (game) |
+| F1 | Guide, or hold Back and press Start | Options | Options |
+| Esc | B or Start | Close Options | Close Options |
+| F11, Alt+Enter | | Fullscreen | Fullscreen |
+| F4 | | All SDK settings | All SDK settings |
+
+Any XInput, PlayStation, Switch Pro or other controller SDL knows works, and can be plugged in at
+any time; the launcher and Options name the connected ones. In Options a controller moves with the
+D-pad, A opens a list or toggles a box, B backs out of a list and then closes Options. A button
+that opens or closes Options never reaches the game. Windows' Game Bar also opens on the Xbox
+button unless it is turned off in Windows settings; Back + Start avoids it. For a rare controller
+SDL lacks, put the community `gamecontrollerdb.txt` next to the executable.
+
+The keyboard is also player 1's controller, alongside any pad (Options, "Keyboard as controller"):
+
+| Keys | Controller |
+| --- | --- |
+| Return, X | Start |
+| Space, `;` | A |
+| Backspace, `'` | B |
+| L | X |
+| P | Y |
+| Tab, Z | Back |
+| W A S D | Left stick |
+| Arrows | Right stick |
+| Shift + arrows | D-pad |
+| 1, 3 | Left, right shoulder |
+| Q, E | Left, right trigger |
+| F, K | Left, right stick press |
 
 Options (F1) covers display (fullscreen, aspect ratio, render scale), graphics (texture filtering,
 vsync, render path), audio (volume, mute) and controls (keyboard as pad, vibration, deadzones).
@@ -58,8 +84,7 @@ build_win.cmd release
 run_win.cmd release
 ```
 
-Keyboard as pad (`--hid.mnk_mode=true`): Return = Start, Space = A, Backspace = B, arrows = D-pad,
-W/A/S/D = left stick. Saves go to `out/build/win-amd64/<config>/user/`; the console's utility
+Saves go to `out/build/win-amd64/<config>/user/`; the console's utility
 drive (`cache:`) is backed by `user/cache/`.
 
 Codegen runs as part of the build (about 2 minutes, 50k functions, ~270 MB of C++); the first
@@ -132,6 +157,12 @@ window), and screenshots the game window with PrintWindow:
 
 `NCAABB10_TEST_ISO=<path>` makes the launcher start the disc image setup on that file, as if
 chosen in the file dialog (which a script cannot drive); the log reports the outcome.
+
+A virtual SDL controller stands in for a real one: `pad:<BUTTON>[:<ms>]` presses a button
+(A B X Y BACK GUIDE START LS RS LB RB UP DOWN LEFT RIGHT), `padhold:<BUTTON>` and `padup:<BUTTON>`
+hold and release one, and `axis:<LX|LY|RX|RY|LT|RT>:<value>` sets a stick or trigger
+(-32768 to 32767). It attaches on the first such step; `drive.ps1` sets
+`SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1` so it works while the window is in the background.
 
 Steps also include `ui:<KEY>[+ALT]`, which pushes the key through the window's own event queue so
 it reaches the launcher and the F1/F11/Alt+Enter binds, and `winsize:<name>`. For example, the

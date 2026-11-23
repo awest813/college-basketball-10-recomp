@@ -12,6 +12,9 @@ void Configure(rex::SettingsRegistry& settings);
 /** Adds the Options overlay and the Alt+Enter / F11 fullscreen toggle. Call after Init. */
 void InstallUI(rex::app::TitleApp& app);
 
+/** Stops the controller shortcut watcher InstallUI starts. Call before Shutdown. */
+void UninstallUI();
+
 /**
  * Shows the launcher until the player chooses Play (true) or quits (false). Skipped, returning
  * true, when verified game files are set up and ncaabb10.show_launcher is off, unless Shift is

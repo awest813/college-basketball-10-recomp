@@ -3,6 +3,7 @@
 
 #include "frontend.h"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -32,6 +33,9 @@
 #include <rex/ui/dialog.h>
 #include <rex/ui/ui_event.h>
 #include <rex/ui/ui_system.h>
+
+#include <SDL3/SDL_gamepad.h>
+#include <SDL3/SDL_stdinc.h>
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -533,6 +537,190 @@ class DiscExtractor {
 };
 
 // ---------------------------------------------------------------------------------------------
+// Controllers
+//
+// The SDK feeds ImGui the keyboard and mouse only. The launcher and Options read the pads
+// themselves, through SDL (the SDK's input driver keeps them open), so a controller can move
+// between controls (D-pad or left stick), choose (A) and go back (B).
+
+// The SDK's driver opens a pad only once the title reads it, so before Play the menus open the
+// pads themselves. SDL counts opens: the driver's later open shares the same pad. UI thread only.
+std::map<SDL_JoystickID, SDL_Gamepad*>& OwnedGamepads() {
+  static std::map<SDL_JoystickID, SDL_Gamepad*> owned;
+  return owned;
+}
+
+void OpenGamepads() {
+  auto& owned = OwnedGamepads();
+  int count = 0;
+  SDL_JoystickID* ids = SDL_GetGamepads(&count);
+  std::set<SDL_JoystickID> present;
+  for (int i = 0; ids && i < count; ++i) {
+    present.insert(ids[i]);
+    if (!owned.contains(ids[i])) {
+      if (SDL_Gamepad* pad = SDL_OpenGamepad(ids[i])) {
+        const char* name = SDL_GetGamepadName(pad);
+        REXLOG_INFO("ncaabb10: controller connected: {}", name ? name : "?");
+        owned[ids[i]] = pad;
+      }
+    }
+  }
+  SDL_free(ids);
+  for (auto it = owned.begin(); it != owned.end();) {
+    if (!present.contains(it->first)) {
+      REXLOG_INFO("ncaabb10: controller disconnected");
+      SDL_CloseGamepad(it->second);
+      it = owned.erase(it);
+    } else {
+      ++it;
+    }
+  }
+}
+
+// Calls fn for each open pad. Any thread: it only reads pads someone already opened.
+template <typename Fn>
+void ForEachGamepad(Fn&& fn) {
+  int count = 0;
+  SDL_JoystickID* ids = SDL_GetGamepads(&count);
+  for (int i = 0; ids && i < count; ++i) {
+    if (SDL_Gamepad* pad = SDL_GetGamepadFromID(ids[i])) {
+      fn(pad);
+    }
+  }
+  SDL_free(ids);
+}
+
+// "Xbox Series X Controller, PS5 Controller", or empty with no controller.
+std::string GamepadNames() {
+  std::string names;
+  ForEachGamepad([&](SDL_Gamepad* pad) {
+    const char* name = SDL_GetGamepadName(pad);
+    names += (names.empty() ? "" : ", ") + std::string(name && *name ? name : "Controller");
+  });
+  return names;
+}
+
+// Once per ImGui frame, from the Draw of whichever front end window is showing.
+void FeedGamepads(ImGuiIO& io) {
+  static int fed_frame = -1;
+  if (ImGui::GetFrameCount() == fed_frame) {
+    return;
+  }
+  fed_frame = ImGui::GetFrameCount();
+  io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
+  OpenGamepads();
+
+  // X and Y stay out: ImGui would take Y as "edit as text", which presses a focused button,
+  // and X as its window menu. The front end has no text fields to edit.
+  struct ButtonMap {
+    SDL_GamepadButton sdl;
+    ImGuiKey key;
+  };
+  static constexpr ButtonMap kButtons[] = {
+      {SDL_GAMEPAD_BUTTON_START, ImGuiKey_GamepadStart},
+      {SDL_GAMEPAD_BUTTON_BACK, ImGuiKey_GamepadBack},
+      {SDL_GAMEPAD_BUTTON_SOUTH, ImGuiKey_GamepadFaceDown},
+      {SDL_GAMEPAD_BUTTON_EAST, ImGuiKey_GamepadFaceRight},
+      {SDL_GAMEPAD_BUTTON_DPAD_UP, ImGuiKey_GamepadDpadUp},
+      {SDL_GAMEPAD_BUTTON_DPAD_DOWN, ImGuiKey_GamepadDpadDown},
+      {SDL_GAMEPAD_BUTTON_DPAD_LEFT, ImGuiKey_GamepadDpadLeft},
+      {SDL_GAMEPAD_BUTTON_DPAD_RIGHT, ImGuiKey_GamepadDpadRight},
+      {SDL_GAMEPAD_BUTTON_LEFT_SHOULDER, ImGuiKey_GamepadL1},
+      {SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, ImGuiKey_GamepadR1},
+      {SDL_GAMEPAD_BUTTON_LEFT_STICK, ImGuiKey_GamepadL3},
+      {SDL_GAMEPAD_BUTTON_RIGHT_STICK, ImGuiKey_GamepadR3},
+  };
+  struct AxisMap {
+    SDL_GamepadAxis sdl;
+    ImGuiKey key;
+    float from, to;  // The raw range that maps to 0..1, starting past the deadzone.
+  };
+  constexpr float kStickDeadzone = 8000, kTriggerDeadzone = 3000;
+  static constexpr AxisMap kAxes[] = {
+      {SDL_GAMEPAD_AXIS_LEFT_TRIGGER, ImGuiKey_GamepadL2, kTriggerDeadzone, 32767},
+      {SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, ImGuiKey_GamepadR2, kTriggerDeadzone, 32767},
+      {SDL_GAMEPAD_AXIS_LEFTX, ImGuiKey_GamepadLStickLeft, -kStickDeadzone, -32768},
+      {SDL_GAMEPAD_AXIS_LEFTX, ImGuiKey_GamepadLStickRight, kStickDeadzone, 32767},
+      {SDL_GAMEPAD_AXIS_LEFTY, ImGuiKey_GamepadLStickUp, -kStickDeadzone, -32768},
+      {SDL_GAMEPAD_AXIS_LEFTY, ImGuiKey_GamepadLStickDown, kStickDeadzone, 32767},
+      {SDL_GAMEPAD_AXIS_RIGHTX, ImGuiKey_GamepadRStickLeft, -kStickDeadzone, -32768},
+      {SDL_GAMEPAD_AXIS_RIGHTX, ImGuiKey_GamepadRStickRight, kStickDeadzone, 32767},
+      {SDL_GAMEPAD_AXIS_RIGHTY, ImGuiKey_GamepadRStickUp, -kStickDeadzone, -32768},
+      {SDL_GAMEPAD_AXIS_RIGHTY, ImGuiKey_GamepadRStickDown, kStickDeadzone, 32767},
+  };
+  bool down[std::size(kButtons)] = {};
+  float amount[std::size(kAxes)] = {};
+  bool any = false;
+  ForEachGamepad([&](SDL_Gamepad* pad) {  // Every pad drives the menus.
+    any = true;
+    for (size_t i = 0; i < std::size(kButtons); ++i) {
+      down[i] = down[i] || SDL_GetGamepadButton(pad, kButtons[i].sdl);
+    }
+    for (size_t i = 0; i < std::size(kAxes); ++i) {
+      const float raw = SDL_GetGamepadAxis(pad, kAxes[i].sdl);
+      const float v = (raw - kAxes[i].from) / (kAxes[i].to - kAxes[i].from);
+      amount[i] = std::max(amount[i], std::min(v, 1.0f));
+    }
+  });
+  if (any) {
+    io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
+  } else {
+    io.BackendFlags &= ~ImGuiBackendFlags_HasGamepad;
+  }
+  for (size_t i = 0; i < std::size(kButtons); ++i) {
+    io.AddKeyEvent(kButtons[i].key, down[i]);
+  }
+  for (size_t i = 0; i < std::size(kAxes); ++i) {
+    io.AddKeyAnalogEvent(kAxes[i].key, amount[i] > 0.1f, amount[i]);
+  }
+}
+
+// Guide (the Xbox or PS button), or Back held while pressing Start, opens and closes Options
+// from the controller, in the launcher and in game. A thread watches for it: no window is drawn
+// in game for a Draw to check from.
+class PadShortcuts {
+ public:
+  void Start(rex::ui::IUISystem& ui) {
+    if (thread_.joinable() || ui.IsHeadless()) {
+      return;
+    }
+    stop_ = false;
+    thread_ = std::thread([this, &ui] {
+      bool was_down = false;
+      while (!stop_) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(16));
+        bool down = false;
+        ForEachGamepad([&](SDL_Gamepad* pad) {
+          down = down || SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_GUIDE) ||
+                 (SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_BACK) &&
+                  SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_START));
+        });
+        if (down && !was_down && !stop_) {
+          REXLOG_INFO("ncaabb10: controller Options shortcut");
+          ui.PostTask([&ui] { ui.ToggleOverlay("options"); });
+        }
+        was_down = down;
+      }
+    });
+  }
+
+  void Stop() {
+    stop_ = true;
+    if (thread_.joinable()) {
+      thread_.join();
+    }
+  }
+
+  ~PadShortcuts() { Stop(); }
+
+ private:
+  std::atomic<bool> stop_{false};
+  std::thread thread_;
+};
+
+PadShortcuts g_pad_shortcuts;
+
+// ---------------------------------------------------------------------------------------------
 // Options overlay
 
 const char* const kAspectRatios[] = {"stretch", "16:9", "16:10", "21:9", "4:3"};
@@ -577,11 +765,20 @@ class OptionsDialog final : public rex::ui::DialogBase {
  public:
   explicit OptionsDialog(rex::ui::IUISystem& ui) : ui_(ui) {}
 
+  void OnShow() override { busy_ = true; }  // Ignore a B still held from the game.
+
   bool Draw(ImGuiIO& io) override {
+    FeedGamepads(io);
     ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
                             ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowSize(ImVec2(520, 0), ImGuiCond_Appearing);
-    bool open = !ImGui::IsKeyPressed(ImGuiKey_Escape, false);  // Esc closes Options.
+    // Esc, or B or Start on a controller, closes Options. B only when it is not backing out of
+    // a list or a slider: last frame nothing was open or being changed. Start not with Back held:
+    // Back + Start is the shortcut, which closes Options itself.
+    bool open = !ImGui::IsKeyPressed(ImGuiKey_Escape, false) &&
+                !(ImGui::IsKeyPressed(ImGuiKey_GamepadStart, false) &&
+                  !ImGui::IsKeyDown(ImGuiKey_GamepadBack)) &&
+                !(ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) && !busy_);
     if (ImGui::Begin("Options##ncaabb10", &open, ImGuiWindowFlags_NoCollapse)) {
       if (ImGui::CollapsingHeader("Display", ImGuiTreeNodeFlags_DefaultOpen)) {
         Checkbox("Fullscreen (Alt+Enter, F11)", "ui.fullscreen");
@@ -613,8 +810,17 @@ class OptionsDialog final : public rex::ui::DialogBase {
         Checkbox("Mute when the window is in the background", "apu.mute_unfocused");
       }
       if (ImGui::CollapsingHeader("Controls", ImGuiTreeNodeFlags_DefaultOpen)) {
+        const std::string pads = GamepadNames();
+        if (pads.empty()) {
+          ImGui::TextColored(ImVec4(1, 0.65f, 0.3f, 1), "No controller found. Plug one in at any time.");
+        } else {
+          ImGui::TextWrapped("Controller: %s", pads.c_str());
+        }
         Checkbox("Keyboard as controller", "hid.mnk_mode",
-                 "Return Start, Space A, Backspace B, arrows D-pad, W/A/S/D left stick");
+                 "The keyboard is player 1's controller, alongside any pad.\n"
+                 "Return Start, Space A, Backspace B, L X, P Y, Tab Back\n"
+                 "W/A/S/D left stick, arrows right stick, Shift+arrows D-pad\n"
+                 "1/3 shoulders, Q/E triggers");
         Checkbox("Vibration", "hid.vibration");
         Slider("Left stick deadzone", "hid.left_stick_deadzone", 0.0f, 0.5f, "%.2f");
         Slider("Right stick deadzone", "hid.right_stick_deadzone", 0.0f, 0.5f, "%.2f");
@@ -635,7 +841,10 @@ class OptionsDialog final : public rex::ui::DialogBase {
       if (ImGui::Button("Close")) {
         open = false;
       }
+      ImGui::TextDisabled("Controller: D-pad to move, A to choose, B to go back or close");
     }
+    busy_ = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId) || ImGui::IsAnyItemActive() ||
+            ImGui::IsKeyDown(ImGuiKey_GamepadFaceRight);
     ImGui::End();
     if (!open) {
       // Close through the overlay registry rather than by returning false: the registry then
@@ -649,6 +858,7 @@ class OptionsDialog final : public rex::ui::DialogBase {
 
  private:
   rex::ui::IUISystem& ui_;
+  bool busy_ = true;
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -712,6 +922,7 @@ class LauncherDialog final : public rex::ui::DialogBase {
       extractor_.reset();
     }
 
+    FeedGamepads(io);
     const ImVec4 kGood(0.45f, 0.9f, 0.45f, 1), kWarn(1, 0.65f, 0.3f, 1);
     ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
                             ImGuiCond_Always, ImVec2(0.5f, 0.5f));
@@ -761,17 +972,33 @@ class LauncherDialog final : public rex::ui::DialogBase {
     }
     ImGui::Spacing();
 
-    // Enter or the controller's A plays, Esc quits, so no mouse is needed. Not with Alt held
-    // (Alt+Enter toggles fullscreen), and not while another window (Options, the F4 settings)
-    // has focus over the launcher: Esc there closes that window instead.
+    // Enter plays and Esc quits, so no mouse is needed. Not with Alt held (Alt+Enter toggles
+    // fullscreen), and not while another window (Options, the F4 settings) has focus over the
+    // launcher: Esc there closes that window instead. A controller moves between the buttons
+    // with the D-pad and presses one with A; the cursor starts on Play, or on disc setup when
+    // the game is not set up. A with no button picked also plays.
     const bool keys = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) ||
                       !ImGui::IsWindowFocused(ImGuiFocusedFlags_AnyWindow);
     const bool ok = check_ == GameCheck::kOk;
-    const bool play_key = keys && ((!io.KeyAlt && (ImGui::IsKeyPressed(ImGuiKey_Enter, false) ||
-                                                   ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false))) ||
-                                   ImGui::IsKeyPressed(ImGuiKey_GamepadFaceDown, false));
+    const bool play_key =
+        keys && ((!io.KeyAlt && (ImGui::IsKeyPressed(ImGuiKey_Enter, false) ||
+                                 ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false))) ||
+                 (ImGui::IsKeyPressed(ImGuiKey_GamepadFaceDown, false) && !ImGui::IsAnyItemFocused()));
     if (keys && ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
       result_ = Result::kQuit;
+    }
+    // Put the controller cursor on the default button when the launcher opens, when the game
+    // becomes playable and when a controller connects. Over a few frames: ImGui applies a focus
+    // request on the next frame, and the first frames of a new window can drop it.
+    const std::string pads = GamepadNames();
+    if (ImGui::IsWindowAppearing() || ok != was_ok_ || (!pads.empty() && !had_pad_)) {
+      focus_frames_ = 3;
+    }
+    was_ok_ = ok;
+    had_pad_ = !pads.empty();
+    const bool appearing = focus_frames_ > 0;
+    if (focus_frames_ > 0) {
+      --focus_frames_;
     }
     ImGui::BeginDisabled(!ok);
     if (ImGui::Button("Play", ImVec2(200, 44)) || (play_key && ok)) {
@@ -780,6 +1007,10 @@ class LauncherDialog final : public rex::ui::DialogBase {
                   ImGui::IsKeyDown(ImGuiKey_KeypadEnter), ImGui::IsKeyDown(ImGuiKey_GamepadFaceDown),
                   io.KeyAlt);
       result_ = Result::kPlay;
+    }
+    if (ok && appearing) {
+      ImGui::SetKeyboardFocusHere(-1);
+      ImGui::SetNavCursorVisible(true);
     }
     ImGui::EndDisabled();
     ImGui::SameLine();
@@ -790,13 +1021,22 @@ class LauncherDialog final : public rex::ui::DialogBase {
     if (ImGui::Button("Quit", ImVec2(130, 44))) {
       result_ = Result::kQuit;
     }
-    ImGui::TextDisabled("Enter / A: Play    Esc: Quit    F1: Options    F11 / Alt+Enter: Fullscreen");
+    ImGui::TextDisabled("Enter / A: Play    Esc: Quit    F1 / Guide: Options    F11 / Alt+Enter: Fullscreen");
+    if (pads.empty()) {
+      ImGui::TextDisabled("No controller found: the keyboard works as one (see Options).");
+    } else {
+      ImGui::TextDisabled("Controller: %s", pads.c_str());
+    }
 
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::TextUnformatted("Game files, from your own disc");
     if (ImGui::Button("Set up from a disc image (.iso)...")) {
       PickIso();
+    }
+    if (!ok && appearing) {
+      ImGui::SetKeyboardFocusHere(-1);
+      ImGui::SetNavCursorVisible(true);
     }
     ImGui::SameLine();
     if (ImGui::Button("Use an extracted folder...")) {
@@ -914,6 +1154,9 @@ class LauncherDialog final : public rex::ui::DialogBase {
   GameCheck check_ = GameCheck::kMissing;
   std::string message_;
   bool message_is_error_ = false;
+  bool was_ok_ = false;
+  bool had_pad_ = false;
+  int focus_frames_ = 0;
   std::unique_ptr<DiscExtractor> extractor_;
   std::chrono::steady_clock::time_point extract_start_;
   Result result_ = Result::kNone;
@@ -959,7 +1202,10 @@ void InstallUI(rex::app::TitleApp& app) {
   if (auto added = ui.AddOverlays(kOverlays); !added) {
     REXLOG_WARN("ncaabb10: adding the Options overlay failed: {}", added.error().GetDescription());
   }
+  g_pad_shortcuts.Start(ui);
 }
+
+void UninstallUI() { g_pad_shortcuts.Stop(); }
 
 bool RunLauncher(rex::app::TitleApp& app) {
   const fs::path default_folder = REX_PATHS().user_root.Get().parent_path() / "game";

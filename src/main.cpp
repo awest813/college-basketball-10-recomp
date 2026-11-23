@@ -9,6 +9,7 @@
 #include <rex/kernel/title_runtime.h>
 #include <rex/logging/log_category.h>
 #include <rex/path_settings.h>
+#include <rex/platform/file.h>
 #include <rex/setting.h>
 #include <rex/settings_registry.h>
 
@@ -84,12 +85,39 @@ void PushWindowKey(unsigned vk, bool alt) {
   }
 }
 
+// A virtual controller for test scripts, attached on first use. SDL lists it like a real pad, so
+// it goes through the SDK's SDL input driver to the title and through the front end's menus.
+SDL_Joystick* TestPad() {
+  static SDL_Joystick* pad = [] {
+    SDL_VirtualJoystickDesc desc;
+    SDL_INIT_INTERFACE(&desc);
+    desc.type = SDL_JOYSTICK_TYPE_GAMEPAD;
+    desc.naxes = SDL_GAMEPAD_AXIS_COUNT;
+    desc.nbuttons = SDL_GAMEPAD_BUTTON_COUNT;
+    desc.axis_mask = (1u << SDL_GAMEPAD_AXIS_COUNT) - 1;
+    desc.button_mask = (1u << SDL_GAMEPAD_BUTTON_COUNT) - 1;
+    desc.name = "Test controller";
+    const SDL_JoystickID id = SDL_AttachVirtualJoystick(&desc);
+    SDL_Joystick* opened = id ? SDL_OpenJoystick(id) : nullptr;
+    REXLOG_INFO("ncaabb10: test controller attached: {}", opened ? "yes" : SDL_GetError());
+    // Let SDL and the input driver list it before its first press.
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    return opened;
+  }();
+  return pad;
+}
+
 // Development aid for automated testing. When NCAABB10_INPUT_FILE names a file, a thread follows it
 // and feeds each new line to the input system as a key event, with input capture forced on, so a
 // test script can drive the game without touching the desktop's real keyboard focus. Lines:
 //   down <vk>   key down (Windows virtual key code, decimal)
 //   up <vk>     key up
-// With --hid.mnk_mode=true the keys act as pad buttons through the hid.keybind_* settings.
+//   ui <vk> [alt]   a key press through the window's event queue
+//   pad <button> <0|1>   a test controller button (SDL_GamepadButton number) up or down
+//   axis <axis> <value>  a test controller axis (SDL_GamepadAxis number), -32768 to 32767
+// With hid.mnk_mode on (the default) the keys act as pad buttons through hid.keybind_*.
+// SDL ignores controllers while the window is in the background, so a script that drives the test
+// controller sets SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1.
 void StartInputFeed(rex::hid::IInputSystem& input) {
   const char* file = std::getenv("NCAABB10_INPUT_FILE");
   if (!file || !*file) {
@@ -120,6 +148,26 @@ void StartInputFeed(rex::hid::IInputSystem& input) {
       for (const auto& line : lines) {
         std::istringstream words(line);
         std::string verb;
+        if (line.starts_with("pad ") || line.starts_with("axis ")) {
+          int index = 0, value = 0;
+          if (!(words >> verb >> index >> value)) {
+            continue;
+          }
+          if (SDL_Joystick* pad = TestPad()) {
+            if (verb == "pad") {
+              SDL_SetJoystickVirtualButton(pad, index, value != 0);
+            } else {
+              SDL_SetJoystickVirtualAxis(pad, index, static_cast<Sint16>(value));
+            }
+          }
+          std::this_thread::sleep_for(std::chrono::milliseconds(60));
+          auto state = input.GetState(0);
+          REXLOG_INFO("ncaabb10: input feed {} {} {} -> user 0 buttons {:#06x} lx {} ly {} lt {}",
+                      verb, index, value, state ? state->state.buttons : 0xFFFF,
+                      state ? state->state.thumb_lx : 0, state ? state->state.thumb_ly : 0,
+                      state ? state->state.left_trigger : 0);
+          continue;
+        }
         unsigned vk = 0;
         if (!(words >> verb >> vk)) {
           continue;
@@ -189,10 +237,22 @@ class Ncaabb10App : public rex::app::TitleApp {
         // The title renders 16:9; keep that shape on 16:10 and ultrawide displays.
         {"ui.aspect_ratio", "16:9"},
         {"gpu.d3d12.allow_tearing", "false"},
+        // The keyboard is player 1's controller too, so the game is playable without a pad. A
+        // connected pad still works: the keyboard merges into user 0 with the first pad.
+        {"hid.mnk_mode", "true"},
     };
     for (const Default& d : kDefaults) {
       if (auto set = settings.SetText(rex::SettingLayer::kTitle, d.name, d.value); !set) {
         REXLOG_WARN("ncaabb10: could not default {}: {}", d.name, set.error().GetDescription());
+      }
+    }
+    // SDL knows most controllers itself. The community gamecontrollerdb.txt adds rarer ones when
+    // a player puts it next to the exe; without it, skip the load instead of warning every start.
+    std::error_code ec;
+    if (!std::filesystem::exists(rex::platform::GetExecutableFolder() / "gamecontrollerdb.txt", ec)) {
+      if (auto set = settings.SetText(rex::SettingLayer::kTitle, "hid.sdl.mappings_file", ""); !set) {
+        REXLOG_WARN("ncaabb10: could not clear hid.sdl.mappings_file: {}",
+                    set.error().GetDescription());
       }
     }
     return rex::Ok();
@@ -229,6 +289,7 @@ int GameMain(Ncaabb10App& app, const rex::CLIArgList& args) {
     if (ncaabb10::frontend::RunLauncher(app) && app.LaunchTitle()) {
       app.Run();
     }
+    ncaabb10::frontend::UninstallUI();
   }
   return app.Shutdown();
 }
