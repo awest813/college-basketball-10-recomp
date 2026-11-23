@@ -58,19 +58,22 @@ function UiKey($v) {
   $vk = [uint32][System.Windows.Forms.Keys]::$name
   Append ("ui $vk " + $(if ($mod -eq 'ALT') { 'alt' } else { '' })); "ui key $v"
 }
-# Test controller (an SDL virtual pad): pad:<BUTTON>[:<ms>] presses a button, padhold:<BUTTON> and
-# padup:<BUTTON> hold and release one, axis:<AXIS>:<value> sets a stick or trigger (-32768..32767).
+# Test controllers (SDL virtual pads): pad:<BUTTON>[:<ms>] presses a button, padhold:<BUTTON> and
+# padup:<BUTTON> hold and release one, axis:<AXIS>:<value> sets a stick or trigger (-32768..32767),
+# unplug:<slot> unplugs one. <BUTTON>@1 and <AXIS>@1 use a second controller (player 2).
 $PadButtons = @{ A = 0; B = 1; X = 2; Y = 3; BACK = 4; GUIDE = 5; START = 6; LS = 7; RS = 8; LB = 9; RB = 10; UP = 11; DOWN = 12; LEFT = 13; RIGHT = 14 }
 $PadAxes = @{ LX = 0; LY = 1; RX = 2; RY = 3; LT = 4; RT = 5 }
+function Slot($name) { $n, $slot = $name.Split('@'); if (-not $slot) { $slot = 0 }; $n, $slot }
 function Pad($v) {
   $name, $ms = $v.Split(':'); if (-not $ms) { $ms = 150 }
-  $b = $PadButtons[$name]; Append "pad $b 1"; Start-Sleep -Milliseconds ([int]$ms); Append "pad $b 0"; "pad $name"
+  $n, $slot = Slot $name; $b = $PadButtons[$n]
+  Append "pad $b 1 $slot"; Start-Sleep -Milliseconds ([int]$ms); Append "pad $b 0 $slot"; "pad $name"
 }
-function PadSet($v, $down) { Append "pad $($PadButtons[$v]) $down"; "pad $v $down" }
-function Axis($v) { $name, $value = $v.Split(':'); Append "axis $($PadAxes[$name]) $value"; "axis $name $value" }
+function PadSet($v, $down) { $n, $slot = Slot $v; Append "pad $($PadButtons[$n]) $down $slot"; "pad $v $down" }
+function Axis($v) { $name, $value = $v.Split(':'); $n, $slot = Slot $name; Append "axis $($PadAxes[$n]) $value $slot"; "axis $name $value" }
 foreach ($s in $Steps) {
   if ($p.HasExited) { "game exited with code $($p.ExitCode)"; break }
   $k, $v = $s.Split(':', 2)
-  switch ($k) { 'wait' { Start-Sleep -Seconds ([double]$v) } 'shot' { Shot $v } 'key' { Key $v } 'watch' { Watch $v } 'burst' { Burst $v } 'winsize' { WinSize $v } 'ui' { UiKey $v } 'pad' { Pad $v } 'padhold' { PadSet $v 1 } 'padup' { PadSet $v 0 } 'axis' { Axis $v } }
+  switch ($k) { 'wait' { Start-Sleep -Seconds ([double]$v) } 'shot' { Shot $v } 'key' { Key $v } 'watch' { Watch $v } 'burst' { Burst $v } 'winsize' { WinSize $v } 'ui' { UiKey $v } 'pad' { Pad $v } 'padhold' { PadSet $v 1 } 'padup' { PadSet $v 0 } 'axis' { Axis $v } 'unplug' { Append "unplug $v"; "unplug $v" } }
 }
 if (-not $Keep -and -not $p.HasExited) { Stop-Process -Id $p.Id -Force; "stopped" }

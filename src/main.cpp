@@ -13,7 +13,9 @@
 #include <rex/setting.h>
 #include <rex/settings_registry.h>
 
+#include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -85,26 +87,54 @@ void PushWindowKey(unsigned vk, bool alt) {
   }
 }
 
-// A virtual controller for test scripts, attached on first use. SDL lists it like a real pad, so
-// it goes through the SDK's SDL input driver to the title and through the front end's menus.
-SDL_Joystick* TestPad() {
-  static SDL_Joystick* pad = [] {
-    SDL_VirtualJoystickDesc desc;
-    SDL_INIT_INTERFACE(&desc);
-    desc.type = SDL_JOYSTICK_TYPE_GAMEPAD;
-    desc.naxes = SDL_GAMEPAD_AXIS_COUNT;
-    desc.nbuttons = SDL_GAMEPAD_BUTTON_COUNT;
-    desc.axis_mask = (1u << SDL_GAMEPAD_AXIS_COUNT) - 1;
-    desc.button_mask = (1u << SDL_GAMEPAD_BUTTON_COUNT) - 1;
-    desc.name = "Test controller";
-    const SDL_JoystickID id = SDL_AttachVirtualJoystick(&desc);
-    SDL_Joystick* opened = id ? SDL_OpenJoystick(id) : nullptr;
-    REXLOG_INFO("ncaabb10: test controller attached: {}", opened ? "yes" : SDL_GetError());
-    // Let SDL and the input driver list it before its first press.
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
-    return opened;
-  }();
-  return pad;
+// Virtual controllers for test scripts, attached on first use. SDL lists them like real pads, so
+// they go through the SDK's SDL input driver to the title and through the front end's menus.
+// The title's vibration requests reach them too and are logged.
+constexpr int kTestPads = 2;
+SDL_Joystick* g_test_pads[kTestPads] = {};
+
+bool SDLCALL TestPadRumble(void* userdata, Uint16 low, Uint16 high) {
+  static std::atomic<uint32_t> last[kTestPads] = {};
+  const int slot = static_cast<int>(reinterpret_cast<intptr_t>(userdata));
+  const uint32_t now = (uint32_t{low} << 16) | high;
+  if (last[slot].exchange(now) != now) {
+    REXLOG_INFO("ncaabb10: test controller {} rumble low {} high {}", slot, low, high);
+  }
+  return true;
+}
+
+SDL_Joystick* TestPad(int slot) {
+  if (g_test_pads[slot]) {
+    return g_test_pads[slot];
+  }
+  SDL_VirtualJoystickDesc desc;
+  SDL_INIT_INTERFACE(&desc);
+  desc.type = SDL_JOYSTICK_TYPE_GAMEPAD;
+  desc.naxes = SDL_GAMEPAD_AXIS_COUNT;
+  desc.nbuttons = SDL_GAMEPAD_BUTTON_COUNT;
+  desc.axis_mask = (1u << SDL_GAMEPAD_AXIS_COUNT) - 1;
+  desc.button_mask = (1u << SDL_GAMEPAD_BUTTON_COUNT) - 1;
+  desc.name = slot == 0 ? "Test controller" : "Test controller 2";
+  desc.userdata = reinterpret_cast<void*>(static_cast<intptr_t>(slot));
+  desc.Rumble = &TestPadRumble;
+  const SDL_JoystickID id = SDL_AttachVirtualJoystick(&desc);
+  g_test_pads[slot] = id ? SDL_OpenJoystick(id) : nullptr;
+  REXLOG_INFO("ncaabb10: test controller {} attached: {}", slot,
+              g_test_pads[slot] ? "yes" : SDL_GetError());
+  // Let SDL and the input driver list it before its first press.
+  std::this_thread::sleep_for(std::chrono::milliseconds(500));
+  return g_test_pads[slot];
+}
+
+// Unplugs a test controller, as pulling its cable would.
+void UnplugTestPad(int slot) {
+  if (SDL_Joystick* pad = g_test_pads[slot]) {
+    const SDL_JoystickID id = SDL_GetJoystickID(pad);
+    SDL_CloseJoystick(pad);
+    SDL_DetachVirtualJoystick(id);
+    g_test_pads[slot] = nullptr;
+    REXLOG_INFO("ncaabb10: test controller {} unplugged", slot);
+  }
 }
 
 // Development aid for automated testing. When NCAABB10_INPUT_FILE names a file, a thread follows it
@@ -113,8 +143,10 @@ SDL_Joystick* TestPad() {
 //   down <vk>   key down (Windows virtual key code, decimal)
 //   up <vk>     key up
 //   ui <vk> [alt]   a key press through the window's event queue
-//   pad <button> <0|1>   a test controller button (SDL_GamepadButton number) up or down
-//   axis <axis> <value>  a test controller axis (SDL_GamepadAxis number), -32768 to 32767
+//   pad <button> <0|1> [slot]   a test controller button (SDL_GamepadButton number) up or down
+//   axis <axis> <value> [slot]  a test controller axis (SDL_GamepadAxis number), -32768 to 32767
+//   unplug <slot>               unplugs a test controller; its next pad or axis line plugs it in
+// Slot is 0 (the default) or 1, a second controller.
 // With hid.mnk_mode on (the default) the keys act as pad buttons through hid.keybind_*.
 // SDL ignores controllers while the window is in the background, so a script that drives the test
 // controller sets SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1.
@@ -148,12 +180,23 @@ void StartInputFeed(rex::hid::IInputSystem& input) {
       for (const auto& line : lines) {
         std::istringstream words(line);
         std::string verb;
+        if (line.starts_with("unplug ")) {
+          int slot = 0;
+          if (words >> verb >> slot && slot >= 0 && slot < kTestPads) {
+            UnplugTestPad(slot);
+          }
+          continue;
+        }
         if (line.starts_with("pad ") || line.starts_with("axis ")) {
-          int index = 0, value = 0;
+          int index = 0, value = 0, slot = 0;
           if (!(words >> verb >> index >> value)) {
             continue;
           }
-          if (SDL_Joystick* pad = TestPad()) {
+          words >> slot;
+          if (slot < 0 || slot >= kTestPads) {
+            continue;
+          }
+          if (SDL_Joystick* pad = TestPad(slot)) {
             if (verb == "pad") {
               SDL_SetJoystickVirtualButton(pad, index, value != 0);
             } else {
@@ -161,9 +204,9 @@ void StartInputFeed(rex::hid::IInputSystem& input) {
             }
           }
           std::this_thread::sleep_for(std::chrono::milliseconds(60));
-          auto state = input.GetState(0);
-          REXLOG_INFO("ncaabb10: input feed {} {} {} -> user 0 buttons {:#06x} lx {} ly {} lt {}",
-                      verb, index, value, state ? state->state.buttons : 0xFFFF,
+          auto state = input.GetState(static_cast<uint32_t>(slot));
+          REXLOG_INFO("ncaabb10: input feed {} {} {} slot {} -> user {} buttons {:#06x} lx {} ly {} lt {}",
+                      verb, index, value, slot, slot, state ? state->state.buttons : 0xFFFF,
                       state ? state->state.thumb_lx : 0, state ? state->state.thumb_ly : 0,
                       state ? state->state.left_trigger : 0);
           continue;

@@ -163,6 +163,9 @@ A virtual SDL controller stands in for a real one: `pad:<BUTTON>[:<ms>]` presses
 hold and release one, and `axis:<LX|LY|RX|RY|LT|RT>:<value>` sets a stick or trigger
 (-32768 to 32767). It attaches on the first such step; `drive.ps1` sets
 `SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1` so it works while the window is in the background.
+`<BUTTON>@1` and `<AXIS>@1` (for example `pad:A@1`) drive a second controller, which the game
+sees as player 2, and `unplug:<0|1>` pulls one out; its next step plugs it back in. The log
+records the vibration the game sends to each (`test controller 0 rumble low .. high ..`).
 
 Steps also include `ui:<KEY>[+ALT]`, which pushes the key through the window's own event queue so
 it reaches the launcher and the F1/F11/Alt+Enter binds, and `winsize:<name>`. For example, the
