@@ -16,7 +16,7 @@ endif ()
 rexglue_project(ncaabb10 OUTPUT_DIR generated/default)
 
 # Host sources. src/main.cpp stays on the executable.
-set(NCAABB10_HOST_SOURCES src/ncaabb10_hooks.cpp src/kernel_fixes.cpp src/diagnostics.cpp src/perf.cpp src/sampler.cpp src/gpu_wait.cpp)
+set(NCAABB10_HOST_SOURCES src/ncaabb10_hooks.cpp src/kernel_fixes.cpp src/diagnostics.cpp src/perf.cpp src/sampler.cpp src/gpu_wait.cpp src/audio_capture.cpp src/frontend.cpp)
 
 # OBJECT and never STATIC, an archive drops the REX_EXPORT symbols.
 add_library(ncaabb10_common OBJECT ${NCAABB10_HOST_SOURCES})
@@ -30,3 +30,6 @@ endif ()
 
 rexglue_setup_target(ncaabb10)
 target_link_libraries(ncaabb10 PRIVATE ncaabb10_common)
+# SDL3 comes with the SDK; the test input feed pushes window key events through it.
+find_package(SDL3 CONFIG REQUIRED)
+target_link_libraries(ncaabb10 PRIVATE SDL3::SDL3)

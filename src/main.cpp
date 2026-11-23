@@ -1,5 +1,7 @@
 // ncaabb10 - ReXGlue Recompiled Project
 
+#include <SDL3/SDL.h>
+
 #include <rex/app/title_app.h>
 #include <rex/filesystem/file_system.h>
 #include <rex/hid/input_system.h>
@@ -20,6 +22,7 @@
 #include <vector>
 
 #include "generated/default/ncaabb10_init.h"
+#include "frontend.h"
 
 namespace {
 
@@ -45,6 +48,40 @@ rex::Result<void> MountUtilityDrive(rex::kernel::TitleRuntime& title) {
   REX_TRY_VOID(files.Link("cache:", "\\CACHE"));
   REXLOG_INFO("ncaabb10: utility drive cache: -> {}", host.string());
   return rex::Ok();
+}
+
+// Pushes a key press and release into the SDL event queue of the game window.
+void PushWindowKey(unsigned vk, bool alt) {
+  SDL_Scancode scancode = SDL_SCANCODE_UNKNOWN;
+  if (vk >= 0x70 && vk <= 0x7B) {
+    scancode = static_cast<SDL_Scancode>(SDL_SCANCODE_F1 + (vk - 0x70));  // F1-F12
+  } else if (vk == 0x0D) {
+    scancode = SDL_SCANCODE_RETURN;
+  } else if (vk == 0x1B) {
+    scancode = SDL_SCANCODE_ESCAPE;
+  } else if (vk >= 'A' && vk <= 'Z') {
+    scancode = static_cast<SDL_Scancode>(SDL_SCANCODE_A + (vk - 'A'));
+  }
+  int count = 0;
+  SDL_Window** windows = SDL_GetWindows(&count);
+  if (scancode == SDL_SCANCODE_UNKNOWN || !windows || count == 0) {
+    SDL_free(windows);
+    return;
+  }
+  const SDL_WindowID window = SDL_GetWindowID(windows[0]);
+  SDL_free(windows);
+  const SDL_Keymod mod = alt ? SDL_KMOD_LALT : SDL_KMOD_NONE;
+  for (bool down : {true, false}) {
+    SDL_Event event{};
+    event.type = down ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
+    event.key.windowID = window;
+    event.key.scancode = scancode;
+    event.key.key = SDL_GetKeyFromScancode(scancode, mod, false);
+    event.key.mod = mod;
+    event.key.down = down;
+    SDL_PushEvent(&event);
+    std::this_thread::sleep_for(std::chrono::milliseconds(80));
+  }
 }
 
 // Development aid for automated testing. When NCAABB10_INPUT_FILE names a file, a thread follows it
@@ -84,7 +121,19 @@ void StartInputFeed(rex::hid::IInputSystem& input) {
         std::istringstream words(line);
         std::string verb;
         unsigned vk = 0;
-        if (!(words >> verb >> vk) || (verb != "down" && verb != "up")) {
+        if (!(words >> verb >> vk)) {
+          continue;
+        }
+        if (verb == "ui") {
+          // A key press through the window's own event queue, as a real key would arrive: it
+          // reaches the UI binds (F1, F11, Alt+Enter) and ImGui, not only the title's pad.
+          std::string modifier;
+          words >> modifier;
+          PushWindowKey(vk, modifier == "alt");
+          REXLOG_INFO("ncaabb10: input feed ui {} {}", vk, modifier);
+          continue;
+        }
+        if (verb != "down" && verb != "up") {
           continue;
         }
         rex::InputEvent focus;  // The window may not have real focus while a script drives it.
@@ -117,6 +166,7 @@ class Ncaabb10App : public rex::app::TitleApp {
   // command line still override them.
   rex::Result<void> OnConfigure(rex::SettingsRegistry& settings) override {
     REX_TRY_VOID(TitleApp::OnConfigure(settings));
+    ncaabb10::frontend::Configure(settings);
     struct Default {
       const char* name;
       const char* value;
@@ -136,6 +186,8 @@ class Ncaabb10App : public rex::app::TitleApp {
         // at a clean 60 with vsync, 22 of 24 without). Present without waiting, and without
         // tearing: the flip model swap chain shows the newest frame on the display's refresh.
         {"gpu.vsync", "false"},
+        // The title renders 16:9; keep that shape on 16:10 and ultrawide displays.
+        {"ui.aspect_ratio", "16:9"},
         {"gpu.d3d12.allow_tearing", "false"},
     };
     for (const Default& d : kDefaults) {
@@ -170,4 +222,15 @@ class Ncaabb10App : public rex::app::TitleApp {
   }
 };
 
-REX_TITLE_APP(Ncaabb10App)
+// Init, then the launcher until the player chooses Play, then the title.
+int GameMain(Ncaabb10App& app, const rex::CLIArgList& args) {
+  if (app.Init(args)) {
+    ncaabb10::frontend::InstallUI(app);
+    if (ncaabb10::frontend::RunLauncher(app) && app.LaunchTitle()) {
+      app.Run();
+    }
+  }
+  return app.Shutdown();
+}
+
+REX_TITLE_APP_MAIN(Ncaabb10App, GameMain)

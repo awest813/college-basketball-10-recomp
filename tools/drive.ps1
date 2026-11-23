@@ -46,9 +46,20 @@ function Burst($v) {
   for ($i = 1; $i -le [int]$count; $i++) { Shot ('{0}{1:D3}' -f $prefix, $i) | Out-Null; Start-Sleep -Milliseconds ([int]$ms) }
   "burst $count shots as $prefix"
 }
+# winsize:<name> logs the game window's size (to check fullscreen).
+function WinSize($name) {
+  $h = Hwnd; $r = New-Object RECT; [W]::GetClientRect($h, [ref]$r) | Out-Null
+  "size $name $($r.R)x$($r.B)"
+}
+# ui:<KEY>[+ALT] presses a key through the game window's event queue (UI binds, ImGui).
+function UiKey($v) {
+  $name, $mod = $v.Split('+')
+  $vk = [uint32][System.Windows.Forms.Keys]::$name
+  Append ("ui $vk " + $(if ($mod -eq 'ALT') { 'alt' } else { '' })); "ui key $v"
+}
 foreach ($s in $Steps) {
   if ($p.HasExited) { "game exited with code $($p.ExitCode)"; break }
   $k, $v = $s.Split(':', 2)
-  switch ($k) { 'wait' { Start-Sleep -Seconds ([double]$v) } 'shot' { Shot $v } 'key' { Key $v } 'watch' { Watch $v } 'burst' { Burst $v } }
+  switch ($k) { 'wait' { Start-Sleep -Seconds ([double]$v) } 'shot' { Shot $v } 'key' { Key $v } 'watch' { Watch $v } 'burst' { Burst $v } 'winsize' { WinSize $v } 'ui' { UiKey $v } }
 }
 if (-not $Keep -and -not $p.HasExited) { Stop-Process -Id $p.Id -Force; "stopped" }

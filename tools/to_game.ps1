@@ -4,7 +4,7 @@
 param([string]$Out, [string]$Config = "Release", [string]$Build = "win-amd64", [string]$Extra = "", [int]$Watch = 60, [double]$Every = 6, [string[]]$More = @())
 $d = Split-Path $PSScriptRoot
 $exe = "$d\out\build\$Build\$Config\ncaabb10.exe"
-$args2 = "--title.game_root=$d\assets --app.cache_root=$d\out\cache --ui.fullscreen=false --hid.mnk_mode=true $Extra"
+$args2 = "--title.game_root=$d\assets --app.cache_root=$d\out\cache --ui.fullscreen=false --hid.mnk_mode=true --ncaabb10.show_launcher=false $Extra"
 $steps = "wait:33","key:RETURN","wait:5","key:SPACE","wait:28","key:RETURN","wait:5","key:SPACE","wait:6","key:D","wait:1.5","key:SPACE","wait:3","key:SPACE","wait:5","key:SPACE","watch:${Watch}:${Every}:g"
 $steps += $More
 & "$PSScriptRoot\drive.ps1" -Exe $exe -GameArgs $args2 -OutDir $Out -Steps $steps
