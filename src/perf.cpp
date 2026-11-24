@@ -24,10 +24,21 @@
 #include <tlhelp32.h>
 #else
 #include <dlfcn.h>
+#include <unistd.h>
 #include <sys/resource.h>
 #endif
 
 namespace {
+
+// The OS thread id, as the log and the profiler show threads.
+uint64_t LogThreadId() {
+#if defined(_WIN32)
+  return GetCurrentThreadId();
+#else
+  return static_cast<uint64_t>(gettid());
+#endif
+}
+
 
 using Func = void (*)(PPCContext&, uint8_t*);
 using Clock = std::chrono::steady_clock;
@@ -266,7 +277,7 @@ REX_HOOK_RAW(__imp__KeDelayExecutionThread) {
         const double seconds = std::chrono::duration<double>(episode_last - episode_start).count();
         if (episode_yields > 10000 && seconds > 0.5) {
           REXLOG_INFO("ncaabb10: perf load spin {:.2f} s, {} yields (thread {})", seconds,
-                      episode_yields, GetCurrentThreadId());
+                      episode_yields, LogThreadId());
         }
         episode_start = now;
         episode_yields = 0;
@@ -274,7 +285,7 @@ REX_HOOK_RAW(__imp__KeDelayExecutionThread) {
       episode_last = now;
       ++episode_yields;
       if ((n % 4000000) == 0) {
-        REXLOG_INFO("ncaabb10: perf zero sleep #{} thread {} stack {}", n, GetCurrentThreadId(),
+        REXLOG_INFO("ncaabb10: perf zero sleep #{} thread {} stack {}", n, LogThreadId(),
                     GuestStack(base, ctx.r1.u32, ctx.lr));
       }
     }

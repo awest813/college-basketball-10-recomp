@@ -67,6 +67,15 @@
             "cacheVariables": {
                 "CMAKE_PREFIX_PATH": "${sourceDir}/../rexglue-sdk-src/out/install/win-amd64"
             }
+        },
+        {
+            "name": "linux-amd64-patched",
+            "displayName": "Linux AMD64, patched SDK",
+            "description": "Builds against the patched SDK in ../rexglue-sdk-src (Release only, see tools/build_sdk.sh)",
+            "inherits": "linux-base",
+            "cacheVariables": {
+                "CMAKE_PREFIX_PATH": "${sourceDir}/../rexglue-sdk-src/out/install/linux-amd64"
+            }
         }
     ],
     "buildPresets": [
@@ -103,6 +112,11 @@
         {
             "name": "win-amd64-patched-release",
             "configurePreset": "win-amd64-patched",
+            "configuration": "Release"
+        },
+        {
+            "name": "linux-amd64-patched-release",
+            "configurePreset": "linux-amd64-patched",
             "configuration": "Release"
         }
     ]

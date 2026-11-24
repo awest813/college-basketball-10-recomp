@@ -188,7 +188,34 @@ and register writes (about 9%). Tried and left off:
 
 ## Linux
 
-Set `REXGLUE_SDK` to a Linux build of the SDK 0.11.0 and use the `linux-amd64` preset. Not tested yet.
+Builds and runs on x86-64 Linux with the Vulkan driver (tested on Ubuntu 24.04 under WSL2). Put
+`rexglue-sdk-src` (patched, as above) and `vulkan-deps` beside this folder as on Windows, then:
+
+```
+tools/fetch_toolchain.sh    # or: sudo apt install clang-20 lld-20 libx11-xcb-dev
+tools/build_vulkan_deps.sh  # Vulkan 1.4.363 headers and loader, VMA (or set VULKAN_SDK)
+tools/build_sdk.sh          # patched SDK into ../rexglue-sdk-src/out/install/linux-amd64
+./build_linux.sh            # out/build/linux-amd64-patched/Release/ncaabb10
+```
+
+- `tools/fetch_toolchain.sh` needs no root: it downloads clang-20, lld-20 and libx11-xcb-dev (about
+  31 MB) from the system's own apt archive with `apt-get download`, unpacks them under
+  `~/.local/ncaabb10-toolchain` and writes an `env.sh` there that the build scripts source.
+- Ubuntu 24.04's `libvulkan-dev` (1.3.275) is older than the 1.4.313 the SDK needs, hence
+  `tools/build_vulkan_deps.sh`. The game itself loads the system's `libvulkan.so.1`.
+- Also needed (already on a desktop Ubuntu): cmake, ninja, g++-13's libstdc++, and the Wayland,
+  xkbcommon, libdecor, ALSA, PulseAudio and PipeWire development packages SDL3 builds against.
+- Under WSL, build from copies on the Linux file system (for example `~/ncaabb10/`, with
+  `REXGLUE_SDK_SRC` pointing `tools/build_sdk.sh` at the SDK copy and `assets` linked to the
+  Windows folder); building under `/mnt/c` is much slower. The game build takes about 3.5 minutes
+  with 16 jobs; it regenerates the recompiled code first, so it needs `assets/default.xex`.
+
+Run it like the Windows build: `ncaabb10 --title.game_root=<assets>`. Checked under WSL2: boots
+through the intros to the title screen and into the first-run profile screens with a controller
+(the input feed works the same way), and renders the same as on Windows. WSL has only Mesa's CPU
+Vulkan driver (llvmpipe), so it runs at about 30-40 fps there on 8 cores, and this WSL setup had no
+sound server, so it ran silent (SDL3 is built with PipeWire, PulseAudio and ALSA). Not yet tried on
+a Linux machine with a real GPU.
 
 ## Automated testing
 
