@@ -91,6 +91,14 @@ def main():
     images["badname"] = build([(b"default.xex", xex, 0), (b"bad\xff\xfe.bin", small, 0)])
     # A name Windows cannot create.
     images["winname"] = build([(b"default.xex", xex, 0), (b"a<b>.bin", small, 0)])
+    # A Windows device name (writes would vanish into NUL), with an extension as Windows still
+    # treats it.
+    images["devname"] = build([(b"default.xex", xex, 0), (b"NUL.txt", small, 0)])
+    # Two names that differ only in case: one file on Windows, so the second would overwrite.
+    images["casedup"] = build([(b"default.xex", xex, 0), (b"Data.bin", small, 0),
+                               (b"data.bin", small, 0)])
+    # A trailing dot, which Windows drops ("data." would become "data").
+    images["trailingdot"] = build([(b"default.xex", xex, 0), (b"data.", small, 0)])
     # 60 files of 4 GB that share one sector: more than any free space, so setup must refuse
     # before copying anything.
     images["nospace"] = build([(b"default.xex", xex, 0)] +

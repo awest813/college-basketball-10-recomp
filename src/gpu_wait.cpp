@@ -56,8 +56,18 @@ void CpuPause() {
 
 void SleepMicroseconds(int64_t microseconds) {
 #if defined(_WIN32)
-  thread_local HANDLE timer = CreateWaitableTimerExW(
-      nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+  // One timer per thread, closed when the thread ends (the render thread restarts with the title).
+  struct Timer {
+    HANDLE handle = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+                                           TIMER_ALL_ACCESS);
+    ~Timer() {
+      if (handle) {
+        CloseHandle(handle);
+      }
+    }
+  };
+  thread_local Timer owner;
+  const HANDLE timer = owner.handle;
   if (timer) {
     LARGE_INTEGER due;
     due.QuadPart = -microseconds * 10;  // Relative, in 100 ns units.

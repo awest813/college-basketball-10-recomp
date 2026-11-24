@@ -5,6 +5,8 @@
 param([string]$Build = "win-amd64-patched", [string]$Config = "Release", [string]$Out = "")
 $ErrorActionPreference = "Stop"
 $d = Split-Path $PSScriptRoot
+# A Debug build needs the debug C runtime, which Microsoft does not allow to be shipped.
+if ($Config -eq "Debug") { throw "a Debug build cannot run on another PC; package Release or RelWithDebInfo" }
 $src = "$d\out\build\$Build\$Config"
 if (-not (Test-Path "$src\ncaabb10.exe")) { throw "no build at $src" }
 $runtime = "vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll", "msvcp140_atomic_wait.dll"

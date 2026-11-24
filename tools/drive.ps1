@@ -13,7 +13,10 @@ public static class W {
   [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h, IntPtr dc, uint f);
 }
 "@
-New-Item -ItemType Directory -Force $OutDir | Out-Null
+if (-not (Test-Path -LiteralPath $Exe -PathType Leaf)) { "no game at $Exe (build it first, or pass -Exe)"; return }
+$Exe = (Resolve-Path -LiteralPath $Exe).Path
+# Full paths: the game starts in its own folder, and .NET file calls do not follow Set-Location.
+$OutDir = (New-Item -ItemType Directory -Force $OutDir).FullName
 $feed = Join-Path $OutDir 'input.txt'; Set-Content -Path $feed -Value '' -NoNewline
 $env:NCAABB10_INPUT_FILE = $feed
 $env:SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS = '1'  # The test controller works without window focus.

@@ -32,7 +32,7 @@ void StoreBE32(uint8_t* base, uint32_t address, uint32_t value) {
 // EA's streaming asks for the disc sector a file starts on (it orders reads by disc position),
 // many times per load. SDK 0.11.0 answers XFileSectorInformation through a stub that logs a
 // warning on every call and returns a full 32-bit path hash. Answer here with a stable pseudo
-// sector per open file, kept within a DVD's sector range, and no log (as Xenia and the Skate 3 SDK
+// sector per open file and no log (as Xenia and the Skate 3 SDK
 // fork do; they hash the path, the handle is enough for ordering reads within a session).
 REX_HOOK_RAW(__imp__NtQueryInformationFile) {
   static const Func original = Original("__imp__NtQueryInformationFile");
@@ -48,8 +48,11 @@ REX_HOOK_RAW(__imp__NtQueryInformationFile) {
     ctx.r3.u64 = rex::kernel::X_STATUS_INFO_LENGTH_MISMATCH;
     return;
   }
-  uint32_t sector = handle * 2654435761u;  // Knuth multiplicative hash: spread, never 0 for h != 0.
-  sector = (sector ^ (sector >> 15)) & 0x00FFFFFF;  // Keep it within a DVD's sector range.
+  // Knuth multiplicative hash: spreads handles, which are close together. The game only orders
+  // reads by the value, so 24 bits (a disc's sectors are under 2^22) leave it room without ever
+  // looking like a byte offset; it can be 0, as a file at the start of the disc would be.
+  uint32_t sector = handle * 2654435761u;
+  sector = (sector ^ (sector >> 15)) & 0x00FFFFFF;
   std::memset(base + info, 0, length);
   StoreBE32(base, info, sector);
   if (io_status) {

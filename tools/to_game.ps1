@@ -1,7 +1,7 @@
 # Drives a Release build from boot into a Play Now game (Duke at North Carolina, player on UNC)
 # and screenshots the start of the game. Needs a profile save with autosave on in <build>/user.
-#   to_game.ps1 -Out <folder> [-Config Release] [-Build win-amd64|win-amd64-patched] [-Extra "--gpu.xenos.readback_resolve=full"] [-Watch 60]
-param([string]$Out, [string]$Config = "Release", [string]$Build = "win-amd64", [string]$Extra = "", [int]$Watch = 60, [double]$Every = 6, [string[]]$More = @())
+#   to_game.ps1 -Out <folder> [-Config Release] [-Build win-amd64-patched|win-amd64] [-Extra "--gpu.xenos.readback_resolve=full"] [-Watch 60]
+param([string]$Out, [string]$Config = "Release", [string]$Build = "win-amd64-patched", [string]$Extra = "", [int]$Watch = 60, [double]$Every = 6, [string[]]$More = @())
 $d = Split-Path $PSScriptRoot
 $exe = "$d\out\build\$Build\$Config\ncaabb10.exe"
 $args2 = "--title.game_root=`"$d\assets`" --app.cache_root=`"$d\out\cache`" --ui.fullscreen=false --hid.mnk_mode=true --ncaabb10.show_launcher=false $Extra"

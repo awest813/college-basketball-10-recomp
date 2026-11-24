@@ -345,12 +345,28 @@ class Ncaabb10App : public rex::app::TitleApp {
     if (settings.Find("kernel.gamertag")) {
       (void)settings.SetText(rex::SettingLayer::kTitle, "kernel.gamertag", "Player");
     }
-    // SDL knows most controllers itself. The community gamecontrollerdb.txt adds rarer ones when
-    // a player puts it next to the exe; without it, skip the load instead of warning every start.
+    // SDL knows most controllers itself. The community gamecontrollerdb.txt adds rarer ones. The
+    // SDK looks in app.root (the exe folder, or the user config folder when that one is read only),
+    // so a file next to the exe is used from there too; with neither, skip the load instead of
+    // warning every start.
     std::error_code ec;
-    if (!std::filesystem::exists(rex::platform::GetExecutableFolder() / "gamecontrollerdb.txt", ec)) {
-      if (auto set = settings.SetText(rex::SettingLayer::kTitle, "hid.sdl.mappings_file", ""); !set) {
-        REXLOG_WARN("ncaabb10: could not clear hid.sdl.mappings_file: {}",
+    const std::filesystem::path app_root = REX_PATHS().config_file.Get().parent_path();
+    const std::filesystem::path beside_exe =
+        rex::platform::GetExecutableFolder() / "gamecontrollerdb.txt";
+    std::string mappings;  // Empty: skip the load.
+    if (std::filesystem::exists(app_root / "gamecontrollerdb.txt", ec)) {
+      mappings = "keep";
+    } else if (std::filesystem::exists(beside_exe, ec)) {
+      try {
+        mappings = beside_exe.string();  // The native encoding the SDK parses paths from.
+      } catch (const std::exception&) {
+        // A folder name the narrow encoding cannot hold: skip the file rather than misread it.
+      }
+    }
+    if (mappings != "keep") {
+      if (auto set = settings.SetText(rex::SettingLayer::kTitle, "hid.sdl.mappings_file", mappings);
+          !set) {
+        REXLOG_WARN("ncaabb10: could not set hid.sdl.mappings_file: {}",
                     set.error().GetDescription());
       }
     }
@@ -382,7 +398,9 @@ class Ncaabb10App : public rex::app::TitleApp {
 
 // Init, then the launcher until the player chooses Play, then the title.
 int GameMain(Ncaabb10App& app, const rex::CLIArgList& args) {
-  if (app.Init(args)) {
+  // Init also succeeds when a shutdown request (Ctrl+C, a signal) ended startup before the modules
+  // loaded; then there is no input or UI to use, only Shutdown.
+  if (app.Init(args) && !rex::app::IsShutdownRequested()) {
     std::jthread feed = StartInputFeed(app.GetInput());  // Test scripts drive the launcher too.
     ncaabb10::frontend::InstallUI(app);
     if (ncaabb10::frontend::RunLauncher(app) && app.LaunchTitle()) {

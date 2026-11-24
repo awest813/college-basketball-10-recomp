@@ -58,7 +58,8 @@ any time; the launcher and Options name the connected ones. In Options a control
 D-pad, A opens a list or toggles a box, B backs out of a list and then closes Options. A button
 that opens or closes Options never reaches the game. Windows' Game Bar also opens on the Xbox
 button unless it is turned off in Windows settings; Back + Start avoids it. For a rare controller
-SDL lacks, put the community `gamecontrollerdb.txt` next to the executable.
+SDL lacks, put the community `gamecontrollerdb.txt` next to the executable (or, when that folder
+is read only, beside `ncaabb10_options.toml` in the user settings folder).
 
 The keyboard is also player 1's controller, alongside any pad (Options, "Keyboard as controller"):
 
@@ -126,8 +127,10 @@ full compile takes about 5 minutes on 14 jobs.
 
 The build copies the Visual C++ runtime DLLs the exe and the SDK import (`vcruntime140*.dll`,
 `msvcp140*.dll`) next to the exe, so the build folder runs on a PC without the VC++
-redistributable. `tools/package.ps1` packs a build into `out/ncaabb10-windows-x64.zip` (exe, DLLs,
-README; about 30 MB) without logs, saves, options or linker leftovers. It holds no game files: on
+redistributable. `tools/package.ps1` packs a Release build into `out/ncaabb10-windows-x64.zip`
+(exe, DLLs, README; about 30 MB) without logs, saves, options or linker leftovers. Windows runs
+no PowerShell scripts by default, so start this one and the `tools/*.ps1` test scripts as
+`powershell -ExecutionPolicy Bypass -File tools\package.ps1`. It holds no game files: on
 first start the launcher says the game is not set up and offers to set it up from a disc image or
 an extracted folder.
 
@@ -249,8 +252,16 @@ and register writes (about 9%). Tried and left off:
 
 ## Linux
 
-Builds and runs on x86-64 Linux with the Vulkan driver (tested on Ubuntu 24.04 under WSL2). Put
-`rexglue-sdk-src` (patched, as above) and `vulkan-deps` beside this folder as on Windows, then:
+Builds and runs on x86-64 Linux with the Vulkan driver (tested on Ubuntu 24.04 under WSL2). The
+patched SDK and the `vulkan-deps` clones go beside this folder as on Windows; the SDK, with forward
+slashes:
+
+```
+git clone --branch v0.11.0 --recurse-submodules https://github.com/rexglue/rexglue-sdk.git ../rexglue-sdk-src
+for p in patches/rexglue-sdk-0.11.0-*.patch; do git -C ../rexglue-sdk-src apply "$PWD/$p"; done
+```
+
+Then:
 
 ```
 tools/fetch_toolchain.sh    # or: sudo apt install clang-20 lld-20 libx11-xcb-dev
@@ -295,7 +306,7 @@ window), and screenshots the game window with PrintWindow:
 chosen in the file dialog (which a script cannot drive); the log reports the outcome.
 `python -I tools/make_test_isos.py <dir> assets/default.xex` writes small images for it: a good
 one, the wrong version, not a disc, no `default.xex`, a looping and an oversized file list,
-escaping and invalid names, and short reads.
+escaping and invalid names, a Windows device name, names that differ only in case, and short reads.
 
 A virtual SDL controller stands in for a real one: `pad:<BUTTON>[:<ms>]` presses a button
 (A B X Y BACK GUIDE START LS RS LB RB UP DOWN LEFT RIGHT), `padhold:<BUTTON>` and `padup:<BUTTON>`
@@ -316,4 +327,5 @@ launcher check is
 game and screenshots it (it needs a profile save with autosave on in the build's `user` folder).
 
 Steps are `watch:<seconds>:<interval>:<prefix>`, `wait:<seconds>`, `key:<System.Windows.Forms.Keys name>` and `shot:<name>`. Waits are
-fixed, so leave margin: loads take 30-60 s in a Debug build.
+fixed, so leave margin: loads take 30-60 s in a Debug build. Leave about a second between `ui:`
+presses: presses closer together can be dropped.

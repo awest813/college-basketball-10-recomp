@@ -1,7 +1,7 @@
 # Runs to_game.ps1 several times per configuration and builds one sheet per configuration
 # with the frames where overlay text should be visible (banner, lineups, live score bar).
 #   batch_text.ps1 -Out <folder> -Runs 4 -Configs @{default=""; full="--gpu.xenos.readback_resolve=full"}
-param([string]$Out, [int]$Runs = 4, [hashtable]$Configs, [string]$Build = "win-amd64")
+param([string]$Out, [int]$Runs = 4, [hashtable]$Configs, [string]$Build = "win-amd64-patched")
 Add-Type -AssemblyName System.Drawing
 foreach ($name in $Configs.Keys) {
   for ($i = 1; $i -le $Runs; $i++) {

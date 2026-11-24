@@ -100,6 +100,15 @@ std::map<std::string, std::string> g_user_values;
 // Values for settings that can no longer change in this run (kUntilLaunch ones once the title
 // runs): saved to the file now, applied on the next start.
 std::map<std::string, std::string> g_next_start;
+// Each setting's text right after the options file or Options set it. A runtime-layer value that
+// differs later was set elsewhere (F4's All settings); Save adopts it, so the last choice wins.
+std::map<std::string, std::string> g_applied;
+
+void Remember(const rex::SettingsRegistry& settings, const std::string& name) {
+  if (auto found = settings.Find(name); found) {
+    g_applied[name] = (*found)->GetText();
+  }
+}
 
 // Fixed when the options load, so a --config_file given on the command line (parsed after that)
 // does not make Save write somewhere other than the file that was read.
@@ -190,7 +199,33 @@ std::string TomlValue(std::string_view name, std::string_view text) {
   return TomlString(text);
 }
 
+// Takes in what F4 changed since Options or the file last set a setting Options manages; without
+// this, writing the options file again (or the next start) would undo that change. True if any.
+bool AdoptOtherChanges() {
+  bool any = false;
+  if (!g_registry) {
+    return false;
+  }
+  for (auto& [name, value] : g_user_values) {
+    auto found = g_registry->Find(name);
+    auto applied = g_applied.find(name);
+    if (!found || !*found || applied == g_applied.end() || (*found)->IsFrozen() ||
+        (*found)->GetLayer() != rex::SettingLayer::kRuntime) {
+      continue;
+    }
+    const std::string text = (*found)->GetText();
+    if (text != applied->second) {
+      REXLOG_INFO("ncaabb10: option {} = {} (changed in All settings)", name, text);
+      value = TomlValue(name, text);
+      applied->second = text;
+      any = true;
+    }
+  }
+  return any;
+}
+
 void Save() {
+  AdoptOtherChanges();
   std::map<std::string, std::vector<std::string>> sections;
   for (const auto& [name, value] : g_user_values) {
     const size_t dot = name.rfind('.');
@@ -203,6 +238,8 @@ void Save() {
   fs::path temp = path;
   temp += ".tmp";
   std::error_code ec;
+  // app.root is the user config folder when the exe folder is read only; it may not exist yet.
+  fs::create_directories(path.parent_path(), ec);
   {
     std::ofstream out(temp, std::ios::trunc);
     out << "# NCAA Basketball 10 options, written by the launcher and the Options overlay (F1).\n";
@@ -231,7 +268,8 @@ void Save() {
 // this, at the file layer, and a lower layer never replaces a higher one, so a value saved there
 // once cannot undo a later choice in Options. Environment variables apply after this at the same
 // layer, and the command line above it, so both still win. A value this build refuses is reported
-// and dropped; the entries after it still apply.
+// and dropped; the entries after it still apply. The other way round, a later change in F4 is
+// taken into this file (AdoptOtherChanges), so neither undoes the other.
 void LoadUserSettings(rex::SettingsRegistry& settings) {
   std::ifstream in(OptionsFile());
   std::string line, section;
@@ -256,6 +294,7 @@ void LoadUserSettings(rex::SettingsRegistry& settings) {
       continue;
     }
     g_user_values[name] = value;
+    Remember(settings, name);
   }
 }
 
@@ -277,6 +316,7 @@ void SetAndSave(std::string_view name, std::string_view text) {
   }
   REXLOG_INFO("ncaabb10: option {} = {}", name, text);
   g_user_values[std::string(name)] = TomlValue(name, text);
+  Remember(*g_registry, std::string(name));
   Save();
 }
 
@@ -446,6 +486,7 @@ class DiscExtractor {
     failed_ = false;
     canceled_ = false;
     install_moved_ = false;
+    left_old_ = false;
     bytes_done_ = 0;
     bytes_total_ = 0;
     thread_ = std::thread([this, iso, destination] { Run(iso, destination); });
@@ -468,6 +509,8 @@ class DiscExtractor {
   // The previous install could not be put back and is still in <destination>.old (the status
   // says so): the game folder no longer holds a game.
   bool InstallMoved() const { return install_moved_; }
+  // Set up, but some of the player's files could not be moved out of <destination>.old.
+  bool LeftOld() const { return left_old_; }
   uint64_t BytesDone() const { return bytes_done_; }
   uint64_t BytesTotal() const { return bytes_total_; }
   float Progress() const {
@@ -493,6 +536,8 @@ class DiscExtractor {
 
   static constexpr uint64_t kSector = 2048;
   std::set<uint32_t> walked_;  // Directory sectors read, so a looping image cannot recurse forever.
+  std::set<std::string> names_;  // Every path listed, lowercase.
+  uint64_t table_bytes_ = 0;     // Directory table bytes read.
 
   void SetStatus(std::string text) {
     std::lock_guard lock(mutex_);
@@ -511,19 +556,24 @@ class DiscExtractor {
 
   // Files in the old game folder that the new install does not have, such as the disc image
   // itself when the player kept it there, move into the new folder instead of being deleted with
-  // the old install. Only the top level: below it, every folder is the game's own.
-  static void KeepOtherFiles(const fs::path& old, const fs::path& destination) {
+  // the old install. Only the top level: below it, every folder is the game's own. False when one
+  // could not be moved (or the folder not read): then the old folder must stay.
+  static bool KeepOtherFiles(const fs::path& old, const fs::path& destination) {
     std::error_code ec;
-    for (const auto& item : fs::directory_iterator(old, ec)) {
+    fs::directory_iterator it(old, ec);
+    bool all = !ec;
+    for (; !ec && it != fs::directory_iterator(); it.increment(ec)) {
       std::error_code item_ec;
-      const fs::path target = destination / item.path().filename();
+      const fs::path target = destination / it->path().filename();
       if (!fs::exists(target, item_ec) && !item_ec) {
-        fs::rename(item.path(), target, item_ec);
-        if (item_ec) {
-          REXLOG_WARN("ncaabb10: could not keep {}: {}", Utf8(item.path()), item_ec.message());
-        }
+        fs::rename(it->path(), target, item_ec);
+      }
+      if (item_ec) {
+        REXLOG_WARN("ncaabb10: could not keep {}: {}", Utf8(it->path()), item_ec.message());
+        all = false;
       }
     }
+    return all && !ec;
   }
 
   // Extracts into <destination>.partial and swaps it in only once default.xex verifies, so a
@@ -559,6 +609,13 @@ class DiscExtractor {
           done_ = true;
           return;
         }
+      } else if (fs::exists(old, ec)) {
+        // Left by an earlier setup that could not move some of the player's files out of it.
+        install_moved_ = true;  // Not "nothing was changed": the player has to look at it.
+        Fail(Utf8(old) + " is left from an earlier setup and may hold files of yours. Move out "
+             "what you want to keep, delete that folder, then try again.");
+        done_ = true;
+        return;
       }
       fs::remove_all(work, ec);
       Extract(iso, work);
@@ -585,10 +642,11 @@ class DiscExtractor {
               }
             }
           } else {
-            if (had_install) {
-              KeepOtherFiles(old, destination);
+            if (had_install && !KeepOtherFiles(old, destination)) {
+              left_old_ = true;  // The new game is in place; the rest stays for the player.
+            } else {
+              fs::remove_all(old, ec);
             }
-            fs::remove_all(old, ec);
           }
         }
       }
@@ -603,9 +661,10 @@ class DiscExtractor {
 
   // The disc's file names are printable ASCII that every host file system takes. Anything else
   // (a separator or a drive colon that would write outside the destination, "..", bytes that are
-  // not text) means a damaged or altered image; skipping the entry would install a broken game.
+  // not text, a Windows device name such as NUL or COM1, a trailing dot or space that Windows
+  // drops) means a damaged or altered image; skipping the entry would install a broken game.
   static bool PlainName(std::string_view name) {
-    if (name.empty() || name == "." || name == "..") {
+    if (name.empty() || name == "." || name == ".." || name.back() == '.' || name.back() == ' ') {
       return false;
     }
     for (const char c : name) {
@@ -613,7 +672,29 @@ class DiscExtractor {
         return false;
       }
     }
+    // Device names are reserved with any extension ("nul.txt" too) and in any case.
+    const std::string stem = Lower(name.substr(0, name.find('.')));
+    static constexpr std::string_view kDevices[] = {"con", "prn", "aux", "nul", "conin$", "conout$"};
+    for (const std::string_view device : kDevices) {
+      if (stem == device) {
+        return false;
+      }
+    }
+    if (stem.size() == 4 && (stem.starts_with("com") || stem.starts_with("lpt")) &&
+        stem[3] >= '0' && stem[3] <= '9') {
+      return false;
+    }
     return true;
+  }
+
+  static std::string Lower(std::string_view text) {
+    std::string out(text);
+    for (char& c : out) {
+      if (c >= 'A' && c <= 'Z') {
+        c = static_cast<char>(c - 'A' + 'a');
+      }
+    }
+    return out;
   }
 
   // Walks one directory table, a binary tree of entries addressed in 4-byte units.
@@ -628,7 +709,9 @@ class DiscExtractor {
       return false;
     }
     // A real directory table is a few sectors; a damaged one must not loop or exhaust memory.
-    if (size > (16u << 20) || !walked_.insert(sector).second) {
+    // Nor, across all its tables, list more than a disc could hold.
+    table_bytes_ += size;
+    if (size > (16u << 20) || table_bytes_ > (64u << 20) || !walked_.insert(sector).second) {
       return false;
     }
     std::vector<uint8_t> table(size);
@@ -658,7 +741,9 @@ class DiscExtractor {
         continue;
       }
       const std::string name(reinterpret_cast<const char*>(&table[offset + 14]), name_length);
-      if (!PlainName(name)) {
+      // Two names that differ only in case would be one file on Windows: the second overwrites.
+      if (!PlainName(name) || !names_.insert(Lower(prefix + name)).second ||
+          names_.size() > 1000000) {
         return false;
       }
       if (attributes & 0x10) {
@@ -680,6 +765,8 @@ class DiscExtractor {
 
   void Extract(const fs::path& iso, const fs::path& destination) {
     walked_.clear();
+    names_.clear();
+    table_bytes_ = 0;
     std::ifstream in(iso, std::ios::binary);
     if (!in) {
       return Fail("Could not open the disc image.");
@@ -791,6 +878,7 @@ class DiscExtractor {
   std::thread thread_;
   std::atomic<bool> cancel_{false}, done_{false}, failed_{false}, canceled_{false};
   std::atomic<bool> install_moved_{false};
+  std::atomic<bool> left_old_{false};
   std::atomic<uint64_t> bytes_done_{0}, bytes_total_{0};
   mutable std::mutex mutex_;
   std::string status_;
@@ -1046,9 +1134,15 @@ void Combo(const char* label, const char* setting, const char* const (&labels)[N
 
 void Slider(const char* label, const char* setting, float min, float max, const char* format) {
   float value = static_cast<float>(GetDouble(setting, min));
-  if (ImGui::SliderFloat(label, &value, min, max, format)) {
-    char text[32];
-    std::snprintf(text, sizeof(text), "%.3f", value);
+  const bool changed = ImGui::SliderFloat(label, &value, min, max, format);
+  char text[32];
+  std::snprintf(text, sizeof(text), "%.3f", value);
+  // Heard and felt while dragging; written to the options file once, on release.
+  if (changed && ImGui::IsItemActive()) {
+    if (g_registry) {
+      (void)g_registry->SetText(setting, text);
+    }
+  } else if (changed || ImGui::IsItemDeactivatedAfterEdit()) {
     SetAndSave(setting, text);
   }
 }
@@ -1263,6 +1357,12 @@ class LauncherDialog final : public rex::ui::DialogBase {
         Recheck();
         message_ = "The game is set up. Press Play.";
         message_is_error_ = false;
+        if (extractor_->LeftOld()) {
+          fs::path old = extract_to_;
+          old += ".old";
+          message_ += " Some files of yours could not be moved out of the old game folder; they "
+                      "are in " + Utf8(old) + ".";
+        }
       }
       extractor_.reset();
     }
@@ -1559,6 +1659,11 @@ class LauncherDialog final : public rex::ui::DialogBase {
 
 // Paths compare by their parts: the setting renders with forward slashes, the launcher's folder
 // with the platform's own.
+// title.game_root as the title will use it: GetText keeps {app.root}-style references unresolved.
+fs::path GameRootSetting() {
+  return rex::detail::ResolveSettingPath(fs::path(GetText("title.game_root")));
+}
+
 bool SamePath(const fs::path& a, const fs::path& b) {
   return a.lexically_normal() == b.lexically_normal();
 }
@@ -1576,7 +1681,7 @@ bool ShiftHeld() {
 
 // For this session only: Save would also persist command line values such as a test's flags.
 void UseFolderThisSession(const fs::path& folder) {
-  if (!SamePath(GetText("title.game_root"), folder) && g_registry) {
+  if (!SamePath(GameRootSetting(), folder) && g_registry) {
     if (auto text = NativeText(folder)) {
       (void)g_registry->SetText("title.game_root", *text);
     }
@@ -1614,7 +1719,13 @@ void InstallUI(rex::app::TitleApp& app) {
   g_pad_shortcuts.Start(ui);
 }
 
-void UninstallUI() { g_pad_shortcuts.Stop(); }
+void UninstallUI() {
+  g_pad_shortcuts.Stop();
+  // Keeps what the player last chose in F4 for settings Options manages, for the next start.
+  if (AdoptOtherChanges()) {
+    Save();
+  }
+}
 
 bool RunLauncher(rex::app::TitleApp& app) {
   // game/ sits beside user/. Made absolute and without a trailing separator first: parent_path()
@@ -1626,7 +1737,7 @@ bool RunLauncher(rex::app::TitleApp& app) {
     user_root = user_root.parent_path();
   }
   const fs::path default_folder = user_root.parent_path() / "game";
-  fs::path folder = GetText("title.game_root");
+  fs::path folder = GameRootSetting();
   if (folder.empty() || CheckGameFolder(folder) == GameCheck::kMissing) {
     if (CheckGameFolder(default_folder) != GameCheck::kMissing) {
       folder = default_folder;
@@ -1660,7 +1771,7 @@ bool RunLauncher(rex::app::TitleApp& app) {
   if (view->result() != LauncherDialog::Result::kPlay) {
     return false;
   }
-  if (!SamePath(GetText("title.game_root"), view->folder())) {
+  if (!SamePath(GameRootSetting(), view->folder())) {
     if (auto text = NativeText(view->folder())) {
       SetAndSave("title.game_root", *text);
     }

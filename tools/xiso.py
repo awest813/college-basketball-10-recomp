@@ -21,9 +21,20 @@ def find_partition(f):
     sys.exit("no XDVDFS volume found")
 
 
-def walk(f, base, sector, size, prefix=""):
+def bad_name(name):
+    """A name that is not a plain file name: it could write outside the output folder."""
+    return (name in ("", ".", "..") or any(c in name for c in '/\\:\0')
+            or name != name.strip(" ."))
+
+
+def walk(f, base, sector, size, prefix="", depth=0, tables=None):
     if size == 0:
         return
+    # A real disc nests a few folders deep and lists each folder once; a damaged one can loop.
+    tables = set() if tables is None else tables
+    if depth > 32 or sector in tables:
+        sys.exit(f"damaged image: folder list loops at {prefix or '/'}")
+    tables.add(sector)
     f.seek(base + sector * SECTOR)
     table = f.read(size)
     stack = [0]
@@ -37,10 +48,12 @@ def walk(f, base, sector, size, prefix=""):
         if left == 0xFFFF and right == 0xFFFF:
             continue
         name = table[off + 14:off + 14 + nlen].decode("latin-1")
+        if bad_name(name):
+            sys.exit(f"damaged image: bad file name {name!r} in {prefix or '/'}")
         path = prefix + name
         if attr & 0x10:
             yield path + "/", start, length, True
-            yield from walk(f, base, start, length, path + "/")
+            yield from walk(f, base, start, length, path + "/", depth + 1, tables)
         else:
             yield path, start, length, False
         if left:
