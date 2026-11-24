@@ -1,0 +1,17 @@
+diff --git a/src/kernel/xboxkrnl/xboxkrnl_io.cpp b/src/kernel/xboxkrnl/xboxkrnl_io.cpp
+index 4f5a7753..2a8f7bdf 100644
+--- a/src/kernel/xboxkrnl/xboxkrnl_io.cpp
++++ b/src/kernel/xboxkrnl/xboxkrnl_io.cpp
+@@ -178,7 +178,11 @@ u32 NtCreateFile_entry(MappedU32 handle_out, u32 desired_access,
+   }
+ 
+   *handle_out = handle;
+-  if (XFAILED(result)) {
++  if (result == X_STATUS_OBJECT_NAME_NOT_FOUND || result == X_STATUS_OBJECT_PATH_NOT_FOUND) {
++    // Titles probe for optional files (patches, caches, DLC) as a matter of course; a missing
++    // one is an answer, not a fault, and dozens per load would bury real warnings.
++    REXKRNL_DEBUG("NtCreateFile path='{}' -> {:#x} (not found)", target_path, result);
++  } else if (XFAILED(result)) {
+     REXKRNL_WARN(
+         "NtCreateFile failed "
+         "path='{}' -> {:#x}",

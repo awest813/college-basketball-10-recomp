@@ -45,7 +45,7 @@ function Key($name, $holdMs = 150) {
 # watch:<seconds>:<interval>:<prefix> takes a screenshot every <interval> seconds.
 function Watch($v) {
   $secs, $every, $prefix = $v.Split(':'); $n = [int]([double]$secs / [double]$every)
-  for ($i = 1; $i -le $n; $i++) { Start-Sleep -Seconds ([double]$every); if ($p.HasExited) { return }; Shot ('{0}{1:D3}' -f $prefix, $i) | Out-Null }
+  for ($i = 1; $i -le $n; $i++) { Start-Sleep -Milliseconds ([int]([double]$every * 1000)); if ($p.HasExited) { return }; Shot ('{0}{1:D3}' -f $prefix, $i) | Out-Null }
   "watched $n shots as $prefix"
 }
 # burst:<count>:<milliseconds>:<prefix> takes <count> screenshots <milliseconds> apart.
@@ -81,6 +81,6 @@ function Axis($v) { $name, $value = $v.Split(':'); $n, $slot = Slot $name; Appen
 foreach ($s in $Steps) {
   if ($p.HasExited) { "game exited with code $($p.ExitCode)"; break }
   $k, $v = $s.Split(':', 2)
-  switch ($k) { 'wait' { Start-Sleep -Seconds ([double]$v) } 'shot' { Shot $v } 'key' { Key $v } 'watch' { Watch $v } 'burst' { Burst $v } 'winsize' { WinSize $v } 'ui' { UiKey $v } 'pad' { Pad $v } 'padhold' { PadSet $v 1 } 'padup' { PadSet $v 0 } 'axis' { Axis $v } 'unplug' { Append "unplug $v"; "unplug $v" } 'text' { Append "text $v"; "text $v" } }
+  switch ($k) { 'wait' { Start-Sleep -Milliseconds ([int]([double]$v * 1000)) } 'shot' { Shot $v } 'key' { Key $v } 'watch' { Watch $v } 'burst' { Burst $v } 'winsize' { WinSize $v } 'ui' { UiKey $v } 'pad' { Pad $v } 'padhold' { PadSet $v 1 } 'padup' { PadSet $v 0 } 'axis' { Axis $v } 'unplug' { Append "unplug $v"; "unplug $v" } 'text' { Append "text $v"; "text $v" } }
 }
 if (-not $Keep -and -not $p.HasExited) { Stop-Process -Id $p.Id -Force; "stopped" }

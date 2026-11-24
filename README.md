@@ -136,7 +136,7 @@ an extracted folder.
 
 ## Patched SDK (recommended for Release)
 
-Six patches fix SDK 0.11.0 bugs that this game hits, or cut its cost:
+Seven patches fix SDK 0.11.0 bugs that this game hits, or cut its cost:
 
 - `patches/rexglue-sdk-0.11.0-texture-watch-race.patch`: the texture cache could stop watching a
   texture the CPU was still filling, leaving the broadcast text (score bar, lineups, rankings)
@@ -157,6 +157,9 @@ Six patches fix SDK 0.11.0 bugs that this game hits, or cut its cost:
   bytes, but the Xenon cache block is 128 bytes and every `dcbz` in this game sits in a clear loop
   that steps 128 bytes (its memset among them), so 96 of every 128 bytes stayed uncleared
   (upstream issue #627, still open). Changes code generation, so the game build regenerates.
+- `patches/rexglue-sdk-0.11.0-quiet-file-probes.patch`: every file the game looks for and does
+  not find (about 70 optional `.db` and `dirinfo` files per load) was logged as a warning,
+  burying real ones. Not found now logs at debug level; other failed opens still warn.
 
 To build with them:
 
@@ -168,6 +171,7 @@ git -C ..\rexglue-sdk-src apply ..\ncaabb10-recomp\patches\rexglue-sdk-0.11.0-ov
 git -C ..\rexglue-sdk-src apply ..\ncaabb10-recomp\patches\rexglue-sdk-0.11.0-profile-name.patch
 git -C ..\rexglue-sdk-src apply ..\ncaabb10-recomp\patches\rexglue-sdk-0.11.0-register-write-lookup.patch
 git -C ..\rexglue-sdk-src apply ..\ncaabb10-recomp\patches\rexglue-sdk-0.11.0-dcbz-cache-block.patch
+git -C ..\rexglue-sdk-src apply ..\ncaabb10-recomp\patches\rexglue-sdk-0.11.0-quiet-file-probes.patch
 tools\build_vulkan_deps.cmd
 tools\build_sdk.cmd
 build_win.cmd release 12 win-amd64-patched
@@ -327,5 +331,5 @@ launcher check is
 game and screenshots it (it needs a profile save with autosave on in the build's `user` folder).
 
 Steps are `watch:<seconds>:<interval>:<prefix>`, `wait:<seconds>`, `key:<System.Windows.Forms.Keys name>` and `shot:<name>`. Waits are
-fixed, so leave margin: loads take 30-60 s in a Debug build. Leave about a second between `ui:`
-presses: presses closer together can be dropped.
+fixed, so leave margin: loads take 30-60 s in a Debug build. Waits take fractions (`wait:0.4`);
+a `ui:` press takes the game about 0.2 s to deliver, so leave at least that between presses.
