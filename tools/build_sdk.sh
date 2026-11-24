@@ -9,10 +9,14 @@
 set -euo pipefail
 jobs="${1:-$(nproc)}"
 here="$(cd "$(dirname "$0")" && pwd)"
-sdk="${REXGLUE_SDK_SRC:-$(cd "$here/../../rexglue-sdk-src" && pwd)}"
+sdk="${REXGLUE_SDK_SRC:-$here/../../rexglue-sdk-src}"
+[ -d "$sdk" ] || { echo "no SDK source at $sdk (set REXGLUE_SDK_SRC)" >&2; exit 1; }
 toolchain="${NCAABB10_TOOLCHAIN:-$HOME/.local/ncaabb10-toolchain}"
 if [ -f "$toolchain/env.sh" ]; then . "$toolchain/env.sh"; fi
-export VULKAN_SDK="${VULKAN_SDK:-$(cd "$here/../../vulkan-deps/prefix-linux" && pwd)}"
+# Checked first: a failing $(...) inside export would not stop the script.
+vulkan="${VULKAN_SDK:-$here/../../vulkan-deps/prefix-linux}"
+[ -d "$vulkan" ] || { echo "no Vulkan SDK at $vulkan (run tools/build_vulkan_deps.sh or set VULKAN_SDK)" >&2; exit 1; }
+export VULKAN_SDK="$(cd "$vulkan" && pwd)"
 cc=clang; cxx=clang++
 if command -v clang-20 >/dev/null; then cc=clang-20; cxx=clang++-20; fi
 cd "$sdk"

@@ -39,6 +39,7 @@ struct GuestFunction {
 struct ThreadSlot {
   HANDLE handle = nullptr;
   uint64_t last_cycles = 0;
+  bool primed = false;  // last_cycles holds a reading: the first one covers the thread's whole life.
   std::string name;
   std::unordered_map<uint64_t, uint64_t> hits;  // key -> CPU cycles; key: guest address or module base | 1
   std::map<std::pair<uint64_t, uint64_t>, uint64_t> via;  // (outside key, caller key) -> CPU cycles
@@ -79,6 +80,10 @@ class Sampler {
         }
         const uint64_t used = cycles - slot.last_cycles;
         slot.last_cycles = cycles;
+        if (!slot.primed) {
+          slot.primed = true;
+          continue;
+        }
         if (used < kMinCycles) {
           continue;  // Waiting or nearly idle since the last tick: not worth suspending.
         }
@@ -364,8 +369,9 @@ const bool g_sampler_started = [] {
     const bool callers = std::strcmp(value, "callers") == 0;
     std::thread([callers] {
       std::this_thread::sleep_for(std::chrono::seconds(3));  // Let the app set up logging.
-      static Sampler sampler(callers);
-      sampler.Run();
+      // Never destroyed: Run never returns, and the exit's static destructors would free the
+      // sampler's tables under it.
+      (new Sampler(callers))->Run();
     }).detach();
   }
   return true;

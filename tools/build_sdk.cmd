@@ -6,9 +6,7 @@ setlocal
 set JOBS=%~1
 if "%JOBS%"=="" set JOBS=12
 set SDK=%~dp0..\..\rexglue-sdk-src
-set VCVARS=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat
-if not exist "%VCVARS%" set VCVARS=C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat
-call "%VCVARS%" >nul || exit /b 1
+call "%~dp0vcvars.cmd" || exit /b 1
 rem Vulkan headers, loader import library and VMA come from tools\build_vulkan_deps.cmd unless a
 rem real Vulkan SDK is set in VULKAN_SDK.
 if "%VULKAN_SDK%"=="" set VULKAN_SDK=%~dp0..\..\vulkan-deps\prefix

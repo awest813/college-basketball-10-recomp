@@ -6,7 +6,7 @@ you supply your own disc.
 
 Status (Windows, Direct3D 12 Xenos backend, patched SDK): a full Play Now game plays from tip-off
 to the post-game menu in a Release build; menus, profile, saves and the in-game broadcast overlays
-work. See `../NCAA_BB10_RECOMP_PLAN.md` for the full plan.
+work. Linux builds and runs too (see Linux below).
 
 ## The game copy
 
@@ -28,9 +28,13 @@ the new copy verifies, so a reinstall needs the space again). **Use an extracted
 replaces `game/` only once `default.xex` verifies, so Cancel (Esc, or B) leaves an existing setup
 untouched. A damaged or altered image (a looping or oversized file list, file names a real disc
 never has, a short read) stops the setup before anything is written, and if swapping in the new
-copy fails (a file held open by another program), the old `game/` is put back. Game folders with
-names in any language work: the Windows exe runs with UTF-8 as its code page (Windows 10 1903 or
-later). For development, extracting into `assets/` works too:
+copy fails (a file held open by another program), the old `game/` is put back. Files of your own
+in `game/` that the disc does not have, such as the disc image itself if you keep it there, move
+into the new copy instead of being deleted with the old one. Game folders with names in any
+language work: the Windows exe runs with UTF-8 as its code page (Windows 10 1903 or later).
+
+Building from source needs the disc extracted into `assets/` as well: code generation reads
+`assets/default.xex`, and `run_win.cmd` plays from that folder:
 
 ```
 python -I tools/xiso.py extract "NCAA Basketball 10 (USA).iso" assets
@@ -76,8 +80,9 @@ The keyboard is also player 1's controller, alongside any pad (Options, "Keyboar
 Options (F1) covers display (fullscreen, aspect ratio, render scale), graphics (texture filtering,
 vsync, render path), audio (volume, mute), controls (keyboard as pad, vibration, deadzones) and
 the player name (patched SDK) the game shows on its menus and save screens. Changes apply at once
-and are saved to `ncaabb10_options.toml` beside the executable; settings marked * apply after a
-restart (the player name applies on Play when changed from the launcher). Untick "Show this
+and are saved to `ncaabb10_options.toml` beside the executable (they win over the same setting in
+`ncaabb10.toml`, which F4's "Save to config" writes; `REX_*` environment variables and the command
+line win over both); settings marked * apply after a restart and show the new choice until then (the player name applies on Play when changed from the launcher). Untick "Show this
 launcher at startup" to go straight to the game; hold Shift while starting to see the launcher
 again. On a large display (fullscreen at 1440p or 4K) the launcher and Options scale up in whole
 steps, so they stay readable from a couch.
@@ -95,10 +100,11 @@ you must be signed in to Xbox Live, as the console does offline.
 
 ## Building on Windows
 
-Needs Visual Studio 2022 or its Build Tools (MSVC + Windows SDK), CMake 3.25+, Ninja and a clang++
-on PATH (tested with clang 22). The presets make clang target `x86_64-pc-windows-msvc` and link with
-`link.exe`, because the SDK binaries use the MSVC ABI; `build_win.cmd` sets up the Visual Studio
-environment first.
+Needs Visual Studio 2022 or later, any edition, or its Build Tools (MSVC + Windows SDK), CMake
+3.25+, Ninja, a clang++ on PATH (tested with clang 22) and the disc extracted into `assets/` (see
+above). The presets make clang target `x86_64-pc-windows-msvc` and link with `link.exe`, because the
+SDK binaries use the MSVC ABI; `build_win.cmd` sets up the Visual Studio environment first
+(`tools\vcvars.cmd` finds it with vswhere).
 
 ```
 build_win.cmd release
@@ -108,7 +114,9 @@ run_win.cmd
 Both default to the `win-amd64-patched` preset, which builds against the patched SDK in
 `..\rexglue-sdk-src` (Release only; see Patched SDK below). `build_win.cmd debug 14 win-amd64` and
 `run_win.cmd stock debug` use the stock SDK 0.11.0 release instead, unpacked beside this folder as
-`rexglue-sdk-0.11.0-win-amd64/win-amd64`; it still has the bugs the patches fix.
+`rexglue-sdk-0.11.0-win-amd64/win-amd64`; it still has the bugs the patches fix. Anything after
+the build words goes to the game unchanged, for example
+`run_win.cmd --ncaabb10.show_launcher=true --hid.keybind_a=Space,J`.
 
 Saves go to `out/build/win-amd64-patched/Release/user/` (see Saves above); the console's utility
 drive (`cache:`) is backed by `user/cache/`.
@@ -190,7 +198,8 @@ long sessions: over 21 minute games the build without it averaged 53.9 fps with 
 windows holding a frame over 150 ms (up to 448 ms, more often as the game went on), and two runs
 with it averaged 57.8 and 57.7 fps with no frame over 150 ms. A whole game with it (51 minutes,
 through halftime and the final buzzer to the post-game menu) averaged 58.0 fps with no frame over
-111 ms. Two project defaults matter as well:
+111 ms. The project's own defaults (`src/main.cpp`; the config file, environment and command line
+override them) matter as well:
 
 - `gpu.d3d12.render_target_path` defaults to `rtv` (set in `src/main.cpp`). The SDK would pick
   `rov` on Intel GPUs, which runs this game at 12-20 fps. Override with
@@ -203,12 +212,22 @@ through halftime and the final buzzer to the post-game menu) averaged 58.0 fps w
   the SDK sizes the target to all of EDRAM, it wraps over the color buffer, and the court went black
   for 5 to 10 seconds whenever no light flares were on screen. It costs about 1 fps in game
   (57.1 against 58.4) and lowers GPU use (57% against 70%).
+- `gpu.vsync=false` (with `gpu.d3d12.allow_tearing=false`): the game paces itself on the SDK's
+  60 Hz vblank, and waiting for the display's vsync as well made it miss frames whenever the two
+  clocks drifted into phase (12 of 24 five-second windows at a clean 60 with vsync, 22 of 24
+  without). Frames still do not tear: the swap chain shows the newest one on each refresh.
+- `gpu.anisotropic_override=-1`: the game's own texture filtering, as on the console, instead of
+  the SDK's forced 4x (Options, Texture filtering, raises it).
+- `ui.aspect_ratio=16:9`: the game renders 16:9, and keeps that shape on 16:10 and ultrawide
+  displays.
 
-Measuring: `NCAABB10_PERF=1` logs fps, frame times, CPU and the busiest threads every 5 s;
-`NCAABB10_PROFILE=1` adds a sampling profile of guest functions every 10 s (it costs fps while
-on), and `NCAABB10_PROFILE=callers` also names the game or SDK function behind time spent in the
-C runtime, the OS or the GPU driver; `tools/perf_run.ps1 -Out <folder>` runs a game and prints
-in-game fps and GPU use.
+Measuring: `NCAABB10_PERF=1` logs fps, frame times, CPU and (on Windows) the busiest threads every
+5 s; `NCAABB10_PROFILE=1` (Windows only) adds a sampling profile of guest functions every 10 s (it
+costs fps while on), and `NCAABB10_PROFILE=callers` also names the game or SDK function behind
+time spent in the C runtime, the OS or the GPU driver; `tools/perf_run.ps1 -Out <folder>` runs a
+game and prints in-game fps and GPU use. `NCAABB10_AUDIO_DUMP=<file.wav>` records the game's
+6-channel mix as it goes to the audio driver, and `python -I tools/audio_check.py <file.wav>`
+summarizes it (levels per half second, silences, clipping and discontinuities).
 
 Where the time goes in game (4 runs, A750): live play averages 58-60 fps and the busiest host
 thread is the GPU command processor, at 0.4-0.6 of a core on average and close to a full core in
@@ -248,7 +267,8 @@ tools/build_sdk.sh          # patched SDK into ../rexglue-sdk-src/out/install/li
 - Also needed (already on a desktop Ubuntu): cmake, ninja, g++-13's libstdc++, and the Wayland,
   xkbcommon, libdecor, ALSA, PulseAudio and PipeWire development packages SDL3 builds against.
 - Under WSL, build from copies on the Linux file system (for example `~/ncaabb10/`, with
-  `REXGLUE_SDK_SRC` pointing `tools/build_sdk.sh` at the SDK copy and `assets` linked to the
+  `REXGLUE_SDK_SRC` pointing `tools/build_sdk.sh` and `build_linux.sh` at the SDK copy if it is not
+  beside the game's, and `assets` linked to the
   Windows folder); building under `/mnt/c` is much slower. The game build takes about 3.5 minutes
   with 16 jobs; it regenerates the recompiled code first, so it needs `assets/default.xex`.
 
@@ -267,7 +287,7 @@ window), and screenshots the game window with PrintWindow:
 
 ```powershell
 & tools\drive.ps1 -Exe out\build\win-amd64\Debug\ncaabb10.exe -OutDir out\shots `
-  -GameArgs "--title.game_root=$PWD\assets --ui.fullscreen=false --hid.mnk_mode=true" `
+  -GameArgs "--title.game_root=`"$PWD\assets`" --ui.fullscreen=false --hid.mnk_mode=true" `
   -Steps "wait:36","key:RETURN","wait:10","shot:after_start"
 ```
 

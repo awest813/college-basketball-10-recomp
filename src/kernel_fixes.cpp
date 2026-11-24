@@ -12,45 +12,13 @@
 #include <rex/ppc/hook.h>
 #include <rex/types.h>
 
-#if defined(_WIN32)
-#include <windows.h>
-#include <psapi.h>
-#else
-#include <dlfcn.h>
-#endif
+#include "sdk_original.h"
 
 namespace {
 
-using Func = void (*)(PPCContext&, uint8_t*);
-
-// Finds the SDK's own export of `name` in a loaded module other than the executable.
-Func Original(const char* name) {
-#if defined(_WIN32)
-  HMODULE modules[512];
-  DWORD bytes = 0;
-  if (EnumProcessModules(GetCurrentProcess(), modules, sizeof(modules), &bytes)) {
-    for (DWORD i = 0; i < bytes / sizeof(HMODULE); ++i) {
-      if (modules[i] == GetModuleHandleW(nullptr)) {
-        continue;
-      }
-      if (auto found = reinterpret_cast<Func>(GetProcAddress(modules[i], name))) {
-        return found;
-      }
-    }
-  }
-  return nullptr;
-#else
-  return reinterpret_cast<Func>(dlsym(RTLD_NEXT, name));
-#endif
-}
-
-void CallOriginal(Func original, PPCContext& ctx, uint8_t* base) {
-  if (original) {
-    original(ctx, base);
-  } else {
-    ctx.r3.u64 = rex::kernel::X_STATUS_NOT_IMPLEMENTED;
-  }
-}
+using Func = ncaabb10::KernelFunc;
+using ncaabb10::CallOriginal;
+using ncaabb10::Original;
 
 void StoreBE32(uint8_t* base, uint32_t address, uint32_t value) {
   const uint32_t swapped = rex::byte_swap(value);

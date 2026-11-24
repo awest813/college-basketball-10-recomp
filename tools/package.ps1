@@ -7,14 +7,21 @@ $ErrorActionPreference = "Stop"
 $d = Split-Path $PSScriptRoot
 $src = "$d\out\build\$Build\$Config"
 if (-not (Test-Path "$src\ncaabb10.exe")) { throw "no build at $src" }
-foreach ($dll in "vcruntime140.dll", "msvcp140.dll") {
+$runtime = "vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll", "msvcp140_atomic_wait.dll"
+foreach ($dll in $runtime) {
   if (-not (Test-Path "$src\$dll")) { throw "$dll missing from $src; rebuild with build_win.cmd" }
 }
 if (-not $Out) { $Out = "$d\out\ncaabb10-windows-x64.zip" }
 $stage = Join-Path ([IO.Path]::GetTempPath()) ("ncaabb10-package-" + [Guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory $stage | Out-Null
 try {
-  Get-ChildItem $src -File | Where-Object { $_.Extension -in ".exe", ".dll" } |
+  # Only what the game loads: the SDK's modules (some loaded by name, not imported), SDL and the
+  # runtime. Not other DLLs a build folder collects, nor Tracy, which only non-Release builds link.
+  $wanted = @("SDL3.dll") + $runtime
+  if ($Config -ne "Release") { $wanted += "TracyClient.dll" }
+  Copy-Item "$src\ncaabb10.exe" $stage
+  Get-ChildItem $src -File -Filter *.dll |
+    Where-Object { $_.Name -like "rex*.dll" -or $wanted -contains $_.Name } |
     Copy-Item -Destination $stage
   Copy-Item "$d\README.md" $stage
   if (Test-Path $Out) { Remove-Item $Out -Confirm:$false }

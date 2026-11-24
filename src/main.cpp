@@ -190,6 +190,11 @@ std::jthread StartInputFeed(rex::hid::IInputSystem& input) {
         if (!in.is_open()) {
           continue;
         }
+        // A file cut shorter than what was read (a test script that starts it over) starts over.
+        in.seekg(0, std::ios::end);
+        if (in.tellg() < consumed) {
+          consumed = 0;
+        }
         in.seekg(consumed);
         std::string line;
         while (std::getline(in, line) && !in.eof()) {  // Skip a partly written last line.

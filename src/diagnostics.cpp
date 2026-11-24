@@ -1,7 +1,7 @@
 // ncaabb10 - diagnostics for the dirty-disc freeze (XamShowDirtyDiscErrorUI on the court loading
 // screen in some boots). Logs only; every hook calls the original.
 
-#include <atomic>
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
@@ -14,6 +14,8 @@
 
 #include "perf_counters.h"
 
+#include "sdk_original.h"
+
 #if defined(_WIN32)
 #include <windows.h>
 #include <psapi.h>
@@ -25,27 +27,9 @@ REX_EXTERN(__imp__sub_826C0388);
 
 namespace {
 
-using Func = void (*)(PPCContext&, uint8_t*);
-
-Func Original(const char* name) {
-#if defined(_WIN32)
-  HMODULE modules[512];
-  DWORD bytes = 0;
-  if (EnumProcessModules(GetCurrentProcess(), modules, sizeof(modules), &bytes)) {
-    for (DWORD i = 0; i < bytes / sizeof(HMODULE); ++i) {
-      if (modules[i] == GetModuleHandleW(nullptr)) {
-        continue;
-      }
-      if (auto found = reinterpret_cast<Func>(GetProcAddress(modules[i], name))) {
-        return found;
-      }
-    }
-  }
-  return nullptr;
-#else
-  return reinterpret_cast<Func>(dlsym(RTLD_NEXT, name));
-#endif
-}
+using Func = ncaabb10::KernelFunc;
+using ncaabb10::CallOriginal;
+using ncaabb10::Original;
 
 uint32_t Load32(const uint8_t* base, uint32_t address) {
   uint32_t value;
@@ -59,6 +43,8 @@ std::string GuestString(const uint8_t* base, uint32_t address, size_t limit = 16
   if (address < 0x10000) {
     return "<null>";
   }
+  // Not past the end of the 4 GB guest space.
+  limit = std::min<uint64_t>(limit, 0x100000000ull - address);
   for (size_t i = 0; i < limit; ++i) {
     char c = static_cast<char>(base[address + i]);
     if (!c) {
@@ -107,7 +93,6 @@ REX_HOOK_RAW(sub_826C0388) {
 // Reads that fail or take long. NtReadFile(handle, event, apc, apc_ctx, io_status, buffer,
 // length, offset*); NtReadFileScatter has the same first five, then segments, length, offset*.
 namespace {
-std::atomic<uint64_t> g_reads{0};
 
 // Calls an SDK kernel export with r3 = arg on the thread's own context (the SDK checks that an
 // export runs on it) and returns its r3, leaving r3 as it was.
@@ -128,7 +113,10 @@ uint32_t CallExport(Func function, PPCContext& ctx, uint8_t* base, uint32_t arg)
 void DumpPages(PPCContext& ctx, uint8_t* base, uint32_t buffer, uint32_t length) {
   static const Func query_protect = Original("__imp__MmQueryAddressProtect");
   static const Func query_size = Original("__imp__MmQueryAllocationSize");
-  const uint32_t first = buffer & ~0xFFFu, last = (buffer + length - 1) & ~0xFFFu;
+  // Clamped to the guest space and to 64 MB of pages: a bad length must not wrap or run on.
+  const uint64_t end = std::min<uint64_t>({uint64_t(buffer) + length - 1, 0xFFFFFFFFull,
+                                          uint64_t(buffer) + (64u << 20) - 1});
+  const uint32_t first = buffer & ~0xFFFu, last = static_cast<uint32_t>(end) & ~0xFFFu;
   std::string runs;
   uint32_t run_start = first, run_protect = 0;
   for (uint32_t page = first;; page += 0x1000) {
@@ -148,7 +136,7 @@ void DumpPages(PPCContext& ctx, uint8_t* base, uint32_t buffer, uint32_t length)
   }
   REXLOG_WARN("ncaabb10: failed read pages{} alloc_size(start)={:#x} alloc_size(end)={:#x}", runs,
               CallExport(query_size, ctx, base, buffer),
-              CallExport(query_size, ctx, base, buffer + length - 1));
+              CallExport(query_size, ctx, base, static_cast<uint32_t>(end)));
 }
 
 // The SDK export a read hook forwards to, logged once.
@@ -160,14 +148,13 @@ Func ReadOriginal(const char* name) {
 
 // NtReadFileScatter's r8 is its segment array, not a buffer; only NtReadFile's buffer is dumped.
 void TimedRead(const char* name, Func original, bool scatter, PPCContext& ctx, uint8_t* base) {
-  ++g_reads;
   const uint32_t handle = ctx.r3.u32, io_status = ctx.r7.u32, buffer = ctx.r8.u32,
                  length = ctx.r9.u32, offset_ptr = ctx.r10.u32;
   const uint64_t offset =
       offset_ptr ? (uint64_t(Load32(base, offset_ptr)) << 32) | Load32(base, offset_ptr + 4) : ~0ull;
   const uint32_t caller_sp = ctx.r1.u32, caller_lr = ctx.lr;
   const auto start = std::chrono::steady_clock::now();
-  original(ctx, base);
+  CallOriginal(original, ctx, base);
   const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
   const uint32_t status = ctx.r3.u32;
   const uint32_t io_result = io_status ? Load32(base, io_status) : 0;
@@ -206,7 +193,7 @@ REX_HOOK_RAW(__imp__MmAllocatePhysicalMemoryEx) {
   static const Func original = Original("__imp__MmAllocatePhysicalMemoryEx");
   const uint32_t size = ctx.r4.u32, protect = ctx.r5.u32, alignment = ctx.r8.u32;
   const uint32_t caller_lr = ctx.lr;
-  original(ctx, base);
+  CallOriginal(original, ctx, base);
   if (TracePhysical()) {
     REXLOG_INFO("ncaabb10: phys alloc size={:#x} prot={:#x} align={:#x} -> {:08X} (lr {:08X})",
                 size, protect, alignment, ctx.r3.u32, caller_lr);
@@ -219,7 +206,7 @@ REX_HOOK_RAW(__imp__MmFreePhysicalMemory) {
   if (TracePhysical()) {
     REXLOG_INFO("ncaabb10: phys free {:08X} type={} (lr {:08X})", ctx.r4.u32, ctx.r3.u32, ctx.lr);
   }
-  original(ctx, base);
+  CallOriginal(original, ctx, base);
 }
 
 REX_HOOK_RAW(__imp__NtReadFile) {

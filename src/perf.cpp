@@ -18,6 +18,8 @@
 
 #include "perf_counters.h"
 
+#include "sdk_original.h"
+
 #if defined(_WIN32)
 #include <windows.h>
 #include <psapi.h>
@@ -41,28 +43,10 @@ uint64_t LogThreadId() {
 }
 
 
-using Func = void (*)(PPCContext&, uint8_t*);
+using Func = ncaabb10::KernelFunc;
+using ncaabb10::CallOriginal;
+using ncaabb10::Original;
 using Clock = std::chrono::steady_clock;
-
-Func Original(const char* name) {
-#if defined(_WIN32)
-  HMODULE modules[512];
-  DWORD bytes = 0;
-  if (EnumProcessModules(GetCurrentProcess(), modules, sizeof(modules), &bytes)) {
-    for (DWORD i = 0; i < bytes / sizeof(HMODULE); ++i) {
-      if (modules[i] == GetModuleHandleW(nullptr)) {
-        continue;
-      }
-      if (auto found = reinterpret_cast<Func>(GetProcAddress(modules[i], name))) {
-        return found;
-      }
-    }
-  }
-  return nullptr;
-#else
-  return reinterpret_cast<Func>(dlsym(RTLD_NEXT, name));
-#endif
-}
 
 // Return addresses up the guest stack: functions save LR at (entry r1 - 8) and keep the back chain
 // at 0(r1), so a frame's LR is at (back chain - 8).
@@ -118,7 +102,8 @@ double ProcessCpuSeconds() {
 #if defined(_WIN32)
 // CPU use of the busiest threads since the last call, as "name 0.97, name 0.40, ...".
 std::string TopThreads(double window_s) {
-  static std::unordered_map<DWORD, double> previous;
+  // Never destroyed: the monitor thread may still be here while the exit runs static destructors.
+  static auto& previous = *new std::unordered_map<DWORD, double>;
   std::unordered_map<DWORD, double> current;
   std::vector<std::pair<double, std::string>> busy;
   HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
@@ -289,7 +274,7 @@ REX_HOOK_RAW(__imp__KeDelayExecutionThread) {
       }
     }
   }
-  original(ctx, base);
+  CallOriginal(original, ctx, base);
 }
 
 // VdSwap is the title's present: one call per guest frame.
@@ -298,5 +283,5 @@ REX_HOOK_RAW(__imp__VdSwap) {
   if (PerfEnabled()) {
     g_stats.OnPresent();
   }
-  original(ctx, base);
+  CallOriginal(original, ctx, base);
 }

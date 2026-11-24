@@ -7,9 +7,7 @@ rem vulkan-1.dll at runtime and does not link or ship this one on Windows.
 setlocal
 set DEPS=%~dp0..\..\vulkan-deps
 set PREFIX=%DEPS%\prefix
-set VCVARS=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat
-if not exist "%VCVARS%" set VCVARS=C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat
-call "%VCVARS%" >nul || exit /b 1
+call "%~dp0vcvars.cmd" || exit /b 1
 cmake -S "%DEPS%\Vulkan-Headers" -B "%DEPS%\build\headers" -G Ninja -DCMAKE_INSTALL_PREFIX="%PREFIX%" || exit /b 1
 cmake --build "%DEPS%\build\headers" --target install || exit /b 1
 cmake -S "%DEPS%\Vulkan-Loader" -B "%DEPS%\build\loader" -G Ninja -DCMAKE_BUILD_TYPE=Release ^

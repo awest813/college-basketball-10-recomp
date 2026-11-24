@@ -21,10 +21,18 @@ $job = Start-Job -ScriptBlock { param($out, $seconds)
     Start-Sleep 4
   }
 } -ArgumentList $gpuFile, ($Watch + 140)
+$since = Get-Date
 $env:NCAABB10_PERF = "1"
-& "$PSScriptRoot\to_game.ps1" -Out $Out -Build $Build -Extra $Extra -Watch $Watch -Every 20 | Out-Null
+try {
+  & "$PSScriptRoot\to_game.ps1" -Out $Out -Build $Build -Extra $Extra -Watch $Watch -Every 20 | Out-Null
+} finally {
+  Remove-Item Env:NCAABB10_PERF -ErrorAction SilentlyContinue
+}
 Stop-Job $job; Remove-Job $job
-$log = Get-ChildItem "$d\out\build\$Build\Release\logs" | Sort-Object LastWriteTime | Select-Object -Last 1
+# This run's log only: a game that failed to start must not report an older run.
+$log = Get-ChildItem "$d\out\build\$Build\Release\logs" | Where-Object { $_.LastWriteTime -ge $since } |
+  Sort-Object LastWriteTime | Select-Object -Last 1
+if (-not $log) { "no log from this run in $d\out\build\$Build\Release\logs"; return }
 Copy-Item $log.FullName (Join-Path $Out "game.log")
 
 # Per-window lines: time, fps, cpu.

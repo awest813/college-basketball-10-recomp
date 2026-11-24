@@ -20,6 +20,8 @@ $env:SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS = '1'  # The test controller works wit
 $startArgs = @{ FilePath = $Exe; WorkingDirectory = (Split-Path $Exe); PassThru = $true }
 if ($GameArgs) { $startArgs.ArgumentList = $GameArgs }  # Start-Process rejects an empty list.
 $p = Start-Process @startArgs
+# The game has its copy of the environment now: do not leave these set in the caller's shell.
+Remove-Item Env:NCAABB10_INPUT_FILE, Env:SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS -ErrorAction SilentlyContinue
 function Hwnd { $p.Refresh(); $p.MainWindowHandle }
 function Shot($name) {
   $h = Hwnd; $r = New-Object RECT; [W]::GetClientRect($h, [ref]$r) | Out-Null

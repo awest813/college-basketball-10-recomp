@@ -14,6 +14,8 @@
 #include <rex/ppc/hook.h>
 #include <rex/types.h>
 
+#include "sdk_original.h"
+
 #if defined(_WIN32)
 #include <windows.h>
 #include <psapi.h>
@@ -23,27 +25,9 @@
 
 namespace {
 
-using Func = void (*)(PPCContext&, uint8_t*);
-
-Func Original(const char* name) {
-#if defined(_WIN32)
-  HMODULE modules[512];
-  DWORD bytes = 0;
-  if (EnumProcessModules(GetCurrentProcess(), modules, sizeof(modules), &bytes)) {
-    for (DWORD i = 0; i < bytes / sizeof(HMODULE); ++i) {
-      if (modules[i] == GetModuleHandleW(nullptr)) {
-        continue;
-      }
-      if (auto found = reinterpret_cast<Func>(GetProcAddress(modules[i], name))) {
-        return found;
-      }
-    }
-  }
-  return nullptr;
-#else
-  return reinterpret_cast<Func>(dlsym(RTLD_NEXT, name));
-#endif
-}
+using Func = ncaabb10::KernelFunc;
+using ncaabb10::CallOriginal;
+using ncaabb10::Original;
 
 constexpr int kChannels = 6;
 constexpr int kFrameSamples = 256;
@@ -55,6 +39,9 @@ class WavWriter {
   explicit WavWriter(const char* path) : file_(std::fopen(path, "wb")) {
     if (file_) {
       WriteHeader();
+      REXLOG_INFO("ncaabb10: capturing audio to {}", path);
+    } else {
+      REXLOG_WARN("ncaabb10: could not open {} for the audio capture", path);
     }
   }
 
@@ -131,5 +118,5 @@ REX_HOOK_RAW(__imp__XAudioSubmitRenderDriverFrame) {
     }
     writer->Append(interleaved, kFrameSamples * kChannels);
   }
-  original(ctx, base);
+  CallOriginal(original, ctx, base);
 }

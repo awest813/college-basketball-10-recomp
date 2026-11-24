@@ -6,8 +6,11 @@ Add-Type -AssemblyName System.Drawing
 foreach ($name in $Configs.Keys) {
   for ($i = 1; $i -le $Runs; $i++) {
     $dir = Join-Path $Out "$name`_$i"
+    $since = Get-Date
     & "$PSScriptRoot\to_game.ps1" -Out $dir -Build $Build -Extra $Configs[$name] -Watch 72 -Every 8 | Out-Null
-    $log = Get-ChildItem (Join-Path (Split-Path $PSScriptRoot) "out\build\$Build\Release\logs") | Sort-Object LastWriteTime | Select-Object -Last 1
+    $log = Get-ChildItem (Join-Path (Split-Path $PSScriptRoot) "out\build\$Build\Release\logs") |
+      Where-Object { $_.LastWriteTime -ge $since } | Sort-Object LastWriteTime | Select-Object -Last 1
+    if (-not $log) { "$name run ${i}: the game wrote no log"; continue }
     Copy-Item $log.FullName (Join-Path $dir "game.log")
     "$name run $i done"
   }

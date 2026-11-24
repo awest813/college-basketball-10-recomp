@@ -47,6 +47,7 @@
 #include <windows.h>
 #include <shellapi.h>
 #else
+#include <SDL3/SDL_events.h>
 #include <SDL3/SDL_keyboard.h>
 #endif
 
@@ -100,8 +101,15 @@ std::map<std::string, std::string> g_user_values;
 // runs): saved to the file now, applied on the next start.
 std::map<std::string, std::string> g_next_start;
 
+// Fixed when the options load, so a --config_file given on the command line (parsed after that)
+// does not make Save write somewhere other than the file that was read.
+fs::path g_options_file;
+
 fs::path OptionsFile() {
-  return REX_PATHS().config_file.Get().parent_path() / "ncaabb10_options.toml";
+  if (g_options_file.empty()) {
+    g_options_file = REX_PATHS().config_file.Get().parent_path() / "ncaabb10_options.toml";
+  }
+  return g_options_file;
 }
 
 // A path as UTF-8 text, for display and logs. fs::path::string() converts to the ANSI code page on
@@ -218,9 +226,12 @@ void Save() {
   }
 }
 
-// Applies the options file (the format Save writes) entry by entry at the config file layer, so the
-// environment and the command line still win. A value this build refuses is reported and dropped;
-// the entries after it still apply.
+// Applies the options file (the format Save writes) entry by entry. It goes in at the environment
+// layer: the SDK loads the config file (ncaabb10.toml, which F4's "Save to config" writes) after
+// this, at the file layer, and a lower layer never replaces a higher one, so a value saved there
+// once cannot undo a later choice in Options. Environment variables apply after this at the same
+// layer, and the command line above it, so both still win. A value this build refuses is reported
+// and dropped; the entries after it still apply.
 void LoadUserSettings(rex::SettingsRegistry& settings) {
   std::ifstream in(OptionsFile());
   std::string line, section;
@@ -239,7 +250,7 @@ void LoadUserSettings(rex::SettingsRegistry& settings) {
     }
     const std::string name = section + "." + Trim(line.substr(0, eq));
     const std::string value = Trim(line.substr(eq + 1));
-    if (auto set = settings.SetText(rex::SettingLayer::kFile, name, TomlValueText(value)); !set) {
+    if (auto set = settings.SetText(rex::SettingLayer::kEnvironment, name, TomlValueText(value)); !set) {
       REXLOG_WARN("ncaabb10: {} refused {} = {} ({}); dropping it", Utf8(OptionsFile()), name, value,
                   set.error().GetDescription());
       continue;
@@ -271,11 +282,16 @@ void SetAndSave(std::string_view name, std::string_view text) {
 
 bool GetBool(std::string_view name) { return GetText(name) == "true"; }
 
-// The player name, including a change waiting for the next start.
-std::string GetGamertag() {
-  const auto next = g_next_start.find("kernel.gamertag");
-  return next != g_next_start.end() ? next->second : GetText("kernel.gamertag");
+// The value Options shows: a change waiting for the next start, else the current value. A setting
+// that is fixed for this run keeps its old value until then, and showing that would look as if the
+// choice had been refused.
+std::string GetShown(std::string_view name) {
+  const auto next = g_next_start.find(std::string(name));
+  return next != g_next_start.end() ? next->second : GetText(name);
 }
+
+// The player name, including a change waiting for the next start.
+std::string GetGamertag() { return GetShown("kernel.gamertag"); }
 
 double GetDouble(std::string_view name, double fallback) {
   const std::string text = GetText(name);
@@ -428,6 +444,8 @@ class DiscExtractor {
   void Start(fs::path iso, fs::path destination) {
     done_ = false;
     failed_ = false;
+    canceled_ = false;
+    install_moved_ = false;
     bytes_done_ = 0;
     bytes_total_ = 0;
     thread_ = std::thread([this, iso, destination] { Run(iso, destination); });
@@ -445,7 +463,11 @@ class DiscExtractor {
   bool Done() const { return done_; }
   bool Failed() const { return failed_; }
   bool Canceling() const { return cancel_ && !done_; }
-  bool Canceled() const { return cancel_ && failed_; }
+  // Stopped by Cancel, not by an error that came up while the cancel was on its way.
+  bool Canceled() const { return canceled_; }
+  // The previous install could not be put back and is still in <destination>.old (the status
+  // says so): the game folder no longer holds a game.
+  bool InstallMoved() const { return install_moved_; }
   uint64_t BytesDone() const { return bytes_done_; }
   uint64_t BytesTotal() const { return bytes_total_; }
   float Progress() const {
@@ -482,6 +504,28 @@ class DiscExtractor {
     failed_ = true;
   }
 
+  void FailCanceled() {
+    canceled_ = true;
+    Fail("Canceled.");
+  }
+
+  // Files in the old game folder that the new install does not have, such as the disc image
+  // itself when the player kept it there, move into the new folder instead of being deleted with
+  // the old install. Only the top level: below it, every folder is the game's own.
+  static void KeepOtherFiles(const fs::path& old, const fs::path& destination) {
+    std::error_code ec;
+    for (const auto& item : fs::directory_iterator(old, ec)) {
+      std::error_code item_ec;
+      const fs::path target = destination / item.path().filename();
+      if (!fs::exists(target, item_ec) && !item_ec) {
+        fs::rename(item.path(), target, item_ec);
+        if (item_ec) {
+          REXLOG_WARN("ncaabb10: could not keep {}: {}", Utf8(item.path()), item_ec.message());
+        }
+      }
+    }
+  }
+
   // Extracts into <destination>.partial and swaps it in only once default.xex verifies, so a
   // canceled or failed copy never leaves a half-written game folder behind.
   // A rename can fail for a moment while an antivirus scanner still holds a freshly written file.
@@ -503,11 +547,18 @@ class DiscExtractor {
     std::error_code ec;
     try {
       // A previous setup that could not put the old install back left it in .old: restore it
-      // before anything below deletes .old. The launcher has already made the destination
-      // folder (to measure free space), so an empty one counts as missing.
+      // before anything below deletes .old. An empty destination counts as missing. If it cannot
+      // be restored, stop: .old is then the only copy of that install.
       if (fs::exists(old, ec) && (!fs::exists(destination, ec) || fs::is_empty(destination, ec))) {
         fs::remove(destination, ec);
         RenameRetrying(old, destination, ec);
+        if (ec) {
+          install_moved_ = true;
+          Fail("The previous game files are in " + Utf8(old) + " and could not be moved back to " +
+               Utf8(destination) + " (" + ec.message() + "). Move them back, then try again.");
+          done_ = true;
+          return;
+        }
       }
       fs::remove_all(work, ec);
       Extract(iso, work);
@@ -528,11 +579,15 @@ class DiscExtractor {
               std::error_code restore_ec;
               RenameRetrying(old, destination, restore_ec);  // Put the old install back.
               if (restore_ec) {
+                install_moved_ = true;
                 Fail("Could not move the copied game into " + Utf8(destination) + ": " +
                      ec.message() + ". The previous game files are in " + Utf8(old) + ".");
               }
             }
           } else {
+            if (had_install) {
+              KeepOtherFiles(old, destination);
+            }
             fs::remove_all(old, ec);
           }
         }
@@ -564,8 +619,13 @@ class DiscExtractor {
   // Walks one directory table, a binary tree of entries addressed in 4-byte units.
   bool Walk(std::ifstream& in, uint64_t base, uint32_t sector, uint32_t size, const std::string& prefix,
             std::vector<Entry>& out, int depth) {
-    if (size == 0 || depth > 32) {
+    if (size == 0) {
       return true;
+    }
+    // The real disc nests a few folders deep; a damaged image could chain thousands of tables,
+    // each up to 16 MB, so the scan stops for Cancel too.
+    if (depth > 32 || cancel_) {
+      return false;
     }
     // A real directory table is a few sectors; a damaged one must not loop or exhaust memory.
     if (size > (16u << 20) || !walked_.insert(sector).second) {
@@ -647,7 +707,7 @@ class DiscExtractor {
     std::vector<Entry> entries;
     SetStatus("Reading the disc's file list...");
     if (!Walk(in, base, root_sector, root_size, "", entries, 0)) {
-      return Fail("The disc image's file list is damaged.");
+      return cancel_ ? FailCanceled() : Fail("The disc image's file list is damaged.");
     }
     uint64_t total = 0;
     bool has_xex = false;
@@ -676,7 +736,7 @@ class DiscExtractor {
     std::vector<char> buffer(16 << 20);
     for (const Entry& e : entries) {
       if (cancel_) {
-        return Fail("Canceled.");
+        return FailCanceled();
       }
       SetStatus(e.path);
       const fs::path out_path = destination / fs::path(std::u8string(e.path.begin(), e.path.end()));
@@ -694,7 +754,7 @@ class DiscExtractor {
       uint64_t remaining = e.size;
       while (remaining) {
         if (cancel_) {
-          return Fail("Canceled.");
+          return FailCanceled();
         }
         const size_t chunk = static_cast<size_t>(std::min<uint64_t>(remaining, buffer.size()));
         in.read(buffer.data(), static_cast<std::streamsize>(chunk));
@@ -707,6 +767,12 @@ class DiscExtractor {
         }
         remaining -= chunk;
         bytes_done_ += chunk;
+      }
+      // The last part of each file is still in the stream's buffer: a write error there shows
+      // up only on close, and would otherwise install a cut-short file.
+      out.close();
+      if (!out) {
+        return Fail("Write error at " + e.path + ". Is there enough free space?");
       }
     }
     SetStatus("Checking default.xex...");
@@ -723,7 +789,8 @@ class DiscExtractor {
   }
 
   std::thread thread_;
-  std::atomic<bool> cancel_{false}, done_{false}, failed_{false};
+  std::atomic<bool> cancel_{false}, done_{false}, failed_{false}, canceled_{false};
+  std::atomic<bool> install_moved_{false};
   std::atomic<uint64_t> bytes_done_{0}, bytes_total_{0};
   mutable std::mutex mutex_;
   std::string status_;
@@ -953,7 +1020,7 @@ const char* const kAnisoLabels[] = {"Game default", "Off", "2x", "4x", "8x", "16
 const char* const kAnisoValues[] = {"-1", "0", "2", "3", "4", "5"};
 
 void Checkbox(const char* label, const char* setting, const char* help = nullptr) {
-  bool value = GetBool(setting);
+  bool value = GetShown(setting) == "true";
   if (ImGui::Checkbox(label, &value)) {
     SetAndSave(setting, value ? "true" : "false");
   }
@@ -965,7 +1032,7 @@ void Checkbox(const char* label, const char* setting, const char* help = nullptr
 template <size_t N>
 void Combo(const char* label, const char* setting, const char* const (&labels)[N],
            const char* const (&values)[N]) {
-  const std::string current = GetText(setting);
+  const std::string current = GetShown(setting);
   int index = 0;
   for (size_t i = 0; i < N; ++i) {
     if (current == values[i]) {
@@ -1017,7 +1084,7 @@ class OptionsDialog final : public rex::ui::DialogBase {
         Combo("Aspect ratio", "ui.aspect_ratio", ratio_labels, kAspectRatios);
         static const char* const scale_labels[] = {"1x (720p)", "2x (1440p)", "3x (2160p)"};
         static const char* const scale_values[] = {"1", "2", "3"};
-        const std::string scale = GetText("gpu.resolution_scale_x");
+        const std::string scale = GetShown("gpu.resolution_scale_x");
         int scale_index = scale == "3" ? 2 : scale == "2" ? 1 : 0;
         if (ImGui::Combo("Render resolution *", &scale_index, scale_labels, 3)) {
           SetAndSave("gpu.resolution_scale_x", scale_values[scale_index]);
@@ -1186,8 +1253,11 @@ class LauncherDialog final : public rex::ui::DialogBase {
         message_ = "Setup canceled. Nothing was changed.";
         message_is_error_ = false;
       } else if (extractor_->Failed()) {
-        message_ = extractor_->Status() + " Nothing was changed; you can try again.";
+        message_ = extractor_->InstallMoved()
+                       ? extractor_->Status()
+                       : extractor_->Status() + " Nothing was changed; you can try again.";
         message_is_error_ = true;
+        Recheck();  // The game folder may have lost its install: Play must not stay enabled.
       } else {
         folder_ = extract_to_;
         Recheck();
@@ -1274,7 +1344,9 @@ class LauncherDialog final : public rex::ui::DialogBase {
     }
     was_ok_ = ok;
     had_pad_ = !pads.empty();
-    const bool appearing = focus_frames_ > 0;
+    // Only while the launcher has the keys: a controller plugged in with Options open over the
+    // launcher must not pull the cursor back behind it.
+    const bool appearing = keys && focus_frames_ > 0;
     if (focus_frames_ > 0) {
       --focus_frames_;
     }
@@ -1386,7 +1458,7 @@ class LauncherDialog final : public rex::ui::DialogBase {
     if (ImGui::Button("Cancel (Esc / B)", ImVec2(160 * scale, 0)) || cancel_key) {
       extractor_->Cancel();
     }
-    if (ImGui::IsWindowAppearing() || !ImGui::IsAnyItemFocused()) {
+    if (keys && (ImGui::IsWindowAppearing() || !ImGui::IsAnyItemFocused())) {
       ImGui::SetKeyboardFocusHere(-1);
       ImGui::SetNavCursorVisible(true);
     }
@@ -1495,8 +1567,20 @@ bool ShiftHeld() {
 #if defined(_WIN32)
   return (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
 #else
+  // SDL learns the modifier state from the window's first events; nothing has pumped them yet.
+  // Pumping only queues them, so the UI still sees every one.
+  SDL_PumpEvents();
   return (SDL_GetModState() & SDL_KMOD_SHIFT) != 0;
 #endif
+}
+
+// For this session only: Save would also persist command line values such as a test's flags.
+void UseFolderThisSession(const fs::path& folder) {
+  if (!SamePath(GetText("title.game_root"), folder) && g_registry) {
+    if (auto text = NativeText(folder)) {
+      (void)g_registry->SetText("title.game_root", *text);
+    }
+  }
 }
 
 }  // namespace
@@ -1507,7 +1591,7 @@ void Configure(rex::SettingsRegistry& settings) {
     REXLOG_WARN("ncaabb10: registering front end settings failed: {}",
                 registered.error().GetDescription());
   }
-  // The player's options, at the config file layer: the environment and command line still win.
+  // The player's options (see LoadUserSettings for the layer they go in at).
   std::error_code ec;
   if (fs::exists(OptionsFile(), ec)) {
     LoadUserSettings(settings);
@@ -1533,7 +1617,15 @@ void InstallUI(rex::app::TitleApp& app) {
 void UninstallUI() { g_pad_shortcuts.Stop(); }
 
 bool RunLauncher(rex::app::TitleApp& app) {
-  const fs::path default_folder = REX_PATHS().user_root.Get().parent_path() / "game";
+  // game/ sits beside user/. Made absolute and without a trailing separator first: parent_path()
+  // of "user/" is "user", and of a relative "user" is empty.
+  fs::path user_root = REX_PATHS().user_root.Get();
+  std::error_code abs_ec;
+  user_root = fs::absolute(user_root, abs_ec).lexically_normal();
+  if (!user_root.has_filename()) {
+    user_root = user_root.parent_path();
+  }
+  const fs::path default_folder = user_root.parent_path() / "game";
   fs::path folder = GetText("title.game_root");
   if (folder.empty() || CheckGameFolder(folder) == GameCheck::kMissing) {
     if (CheckGameFolder(default_folder) != GameCheck::kMissing) {
@@ -1545,16 +1637,12 @@ bool RunLauncher(rex::app::TitleApp& app) {
   REXLOG_INFO("ncaabb10: launcher: game folder '{}' check {} show_launcher {} shift {}", Utf8(folder),
               static_cast<int>(check), Settings().show_launcher.Get(), shift);
   if (check == GameCheck::kOk && !Settings().show_launcher.Get() && !shift) {
-    // This session only: Save would also persist command line values such as a test's flags.
-    if (!SamePath(GetText("title.game_root"), folder) && g_registry) {
-      if (auto text = NativeText(folder)) {
-        (void)g_registry->SetText("title.game_root", *text);
-      }
-    }
+    UseFolderThisSession(folder);
     return true;
   }
   if (app.GetUI().IsHeadless()) {
     if (check == GameCheck::kOk) {
+      UseFolderThisSession(folder);
       return true;
     }
     REXLOG_ERROR("ncaabb10: no verified game files; set title.game_root");

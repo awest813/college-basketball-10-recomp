@@ -2,3 +2,5 @@
 *.sh text eol=lf
 # Codegen rewrites the manifest with LF line endings on every build.
 ncaabb10_manifest.toml text eol=lf
+# cmd mishandles labels and goto in files with LF line endings.
+*.cmd text eol=crlf
