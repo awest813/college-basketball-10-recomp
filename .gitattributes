@@ -1,2 +1,4 @@
 *.patch text eol=lf
 *.sh text eol=lf
+# Codegen rewrites the manifest with LF line endings on every build.
+ncaabb10_manifest.toml text eol=lf
