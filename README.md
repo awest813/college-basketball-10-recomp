@@ -103,13 +103,20 @@ drive (`cache:`) is backed by `user/cache/`.
 Codegen runs as part of the build (about 2 minutes, 50k functions, ~270 MB of C++); the first
 full compile takes about 5 minutes on 14 jobs.
 
+The build copies the Visual C++ runtime DLLs the exe and the SDK import (`vcruntime140*.dll`,
+`msvcp140*.dll`) next to the exe, so the build folder runs on a PC without the VC++
+redistributable. `tools/package.ps1` packs a build into `out/ncaabb10-windows-x64.zip` (exe, DLLs,
+README; about 30 MB) without logs, saves, options or linker leftovers. It holds no game files: on
+first start the launcher says the game is not set up and offers to set it up from a disc image or
+an extracted folder.
+
 ## Patched SDK (recommended for Release)
 
-Five patches fix SDK 0.11.0 bugs that this game hits, or cut its cost:
+Six patches fix SDK 0.11.0 bugs that this game hits, or cut its cost:
 
 - `patches/rexglue-sdk-0.11.0-texture-watch-race.patch`: the texture cache could stop watching a
   texture the CPU was still filling, leaving the broadcast text (score bar, lineups, rankings)
-  blank in about 1 game in 4.
+  blank in about 1 game in 4. (Fixed upstream the same way after 0.11.0, in `36cd208e`.)
 - `patches/rexglue-sdk-0.11.0-physical-heap-release-race.patch`: freeing physical memory on one
   thread could clear an allocation another thread had just made in the same pages; the game's
   next disc read into it failed and it froze on a dirty-disc error while loading a game.
@@ -122,6 +129,10 @@ Five patches fix SDK 0.11.0 bugs that this game hits, or cut its cost:
 - `patches/rexglue-sdk-0.11.0-register-write-lookup.patch`: every GPU register write looked the
   register up in a switch over the whole register table, only to warn about unknown ones; this
   was 3-6% of the GPU command thread. Checks a bitset built once instead.
+- `patches/rexglue-sdk-0.11.0-dcbz-cache-block.patch`: the generated code for `dcbz` cleared 32
+  bytes, but the Xenon cache block is 128 bytes and every `dcbz` in this game sits in a clear loop
+  that steps 128 bytes (its memset among them), so 96 of every 128 bytes stayed uncleared
+  (upstream issue #627, still open). Changes code generation, so the game build regenerates.
 
 To build with them:
 
@@ -132,6 +143,7 @@ git -C ..\rexglue-sdk-src apply ..\ncaabb10-recomp\patches\rexglue-sdk-0.11.0-ph
 git -C ..\rexglue-sdk-src apply ..\ncaabb10-recomp\patches\rexglue-sdk-0.11.0-overlay-self-close.patch
 git -C ..\rexglue-sdk-src apply ..\ncaabb10-recomp\patches\rexglue-sdk-0.11.0-profile-name.patch
 git -C ..\rexglue-sdk-src apply ..\ncaabb10-recomp\patches\rexglue-sdk-0.11.0-register-write-lookup.patch
+git -C ..\rexglue-sdk-src apply ..\ncaabb10-recomp\patches\rexglue-sdk-0.11.0-dcbz-cache-block.patch
 tools\build_vulkan_deps.cmd
 tools\build_sdk.cmd
 build_win.cmd release 12 win-amd64-patched
@@ -142,13 +154,28 @@ build_win.cmd release 12 win-amd64-patched
 The patched SDK is Release only, so use the stock preset for Debug builds (which still have these
 bugs).
 
+Upstream's development branch (nightly `44b7fdc5`, 2026-11-22, 66 commits after 0.11.0) was
+tried with these patches and dropped. Its critical section handoff (`1a8d4199`, `ccc231e9`) leaves
+the game's main thread spinning on a lock while the loader thread barely runs: boot took several
+minutes. With those two commits reverted it boots, but it still stalls at 11-40 fps for about 30 s
+during the intro, where 0.11.0 holds 60, and it had more long hitches over a 20 minute run.
+
 `src/diagnostics.cpp` logs the game's disc-error callback and any failed or slow file read (with
 the guest page state of the buffer); set `NCAABB10_TRACE_PHYS=1` to also log physical allocations
 and frees.
 
+Expected log noise, all harmless: the game probes for files that are not on its disc (`D:\system1.bh`,
+`D:\data\mmdb\*.db`, `GAME:\dirinfo*`, `UPDATE:\`, `rmcsave:\` and others) and carries on, and
+each game load logs six `BaseHeap::Release failed` / `PhysicalHeap::Release failed` pairs: the
+game frees six small 64 KB-page buffers twice in a row (from `826C066C`), the SDK refuses the
+second free, and nothing leaks.
+
 ## Performance
 
-Live play holds 60 fps on an Intel Arc A750 (Release, patched SDK). Two project defaults matter:
+Live play holds 60 fps on an Intel Arc A750 (Release, patched SDK). The `dcbz` patch matters for
+long sessions: over 21 minute games the build without it averaged 53.9 fps with 19 five-second
+windows holding a frame over 150 ms (up to 448 ms, more often as the game went on), and two runs
+with it averaged 57.8 and 57.7 fps with no frame over 150 ms. Two project defaults matter as well:
 
 - `gpu.d3d12.render_target_path` defaults to `rtv` (set in `src/main.cpp`). The SDK would pick
   `rov` on Intel GPUs, which runs this game at 12-20 fps. Override with

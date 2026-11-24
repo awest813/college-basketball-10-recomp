@@ -17,7 +17,9 @@ New-Item -ItemType Directory -Force $OutDir | Out-Null
 $feed = Join-Path $OutDir 'input.txt'; Set-Content -Path $feed -Value '' -NoNewline
 $env:NCAABB10_INPUT_FILE = $feed
 $env:SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS = '1'  # The test controller works without window focus.
-$p = Start-Process -FilePath $Exe -ArgumentList $GameArgs -WorkingDirectory (Split-Path $Exe) -PassThru
+$startArgs = @{ FilePath = $Exe; WorkingDirectory = (Split-Path $Exe); PassThru = $true }
+if ($GameArgs) { $startArgs.ArgumentList = $GameArgs }  # Start-Process rejects an empty list.
+$p = Start-Process @startArgs
 function Hwnd { $p.Refresh(); $p.MainWindowHandle }
 function Shot($name) {
   $h = Hwnd; $r = New-Object RECT; [W]::GetClientRect($h, [ref]$r) | Out-Null

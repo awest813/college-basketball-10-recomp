@@ -33,3 +33,25 @@ target_link_libraries(ncaabb10 PRIVATE ncaabb10_common)
 # SDL3 comes with the SDK; the test input feed pushes window key events through it.
 find_package(SDL3 CONFIG REQUIRED)
 target_link_libraries(ncaabb10 PRIVATE SDL3::SDL3)
+# getenv and fopen are fine here; the MSVC runtime headers flag them as deprecated.
+if (WIN32)
+  target_compile_definitions(ncaabb10_common PRIVATE _CRT_SECURE_NO_WARNINGS)
+  target_compile_definitions(ncaabb10 PRIVATE _CRT_SECURE_NO_WARNINGS)
+  # Copy the Visual C++ runtime the exe and the SDK DLLs import next to them (app-local, as
+  # Microsoft allows), so the build folder runs on a PC without the VC++ redistributable.
+  # vcvars64 (build_win.cmd) sets VCToolsRedistDir.
+  file(GLOB NCAABB10_VC_RUNTIME
+       "$ENV{VCToolsRedistDir}x64/Microsoft.VC*.CRT/vcruntime140.dll"
+       "$ENV{VCToolsRedistDir}x64/Microsoft.VC*.CRT/vcruntime140_1.dll"
+       "$ENV{VCToolsRedistDir}x64/Microsoft.VC*.CRT/msvcp140.dll"
+       "$ENV{VCToolsRedistDir}x64/Microsoft.VC*.CRT/msvcp140_atomic_wait.dll")
+  if (NCAABB10_VC_RUNTIME)
+    add_custom_command(TARGET ncaabb10 POST_BUILD
+                       COMMAND ${CMAKE_COMMAND} -E copy_if_different ${NCAABB10_VC_RUNTIME}
+                               $<TARGET_FILE_DIR:ncaabb10>
+                       VERBATIM)
+  else ()
+    message(WARNING "Visual C++ runtime DLLs not found (VCToolsRedistDir='$ENV{VCToolsRedistDir}'); "
+                    "the build folder will need the VC++ redistributable installed to run")
+  endif ()
+endif ()
