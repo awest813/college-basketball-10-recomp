@@ -180,7 +180,9 @@ second free, and nothing leaks.
 Live play holds 60 fps on an Intel Arc A750 (Release, patched SDK). The `dcbz` patch matters for
 long sessions: over 21 minute games the build without it averaged 53.9 fps with 19 five-second
 windows holding a frame over 150 ms (up to 448 ms, more often as the game went on), and two runs
-with it averaged 57.8 and 57.7 fps with no frame over 150 ms. Two project defaults matter as well:
+with it averaged 57.8 and 57.7 fps with no frame over 150 ms. A whole game with it (51 minutes,
+through halftime and the final buzzer to the post-game menu) averaged 58.0 fps with no frame over
+111 ms. Two project defaults matter as well:
 
 - `gpu.d3d12.render_target_path` defaults to `rtv` (set in `src/main.cpp`). The SDK would pick
   `rov` on Intel GPUs, which runs this game at 12-20 fps. Override with
