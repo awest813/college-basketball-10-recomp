@@ -20,10 +20,12 @@ Only this executable is supported (the analysis config is tied to it):
 | `default.xex` SHA-256 | `3201c28392f73af9c969a740181996e954d3c894a7117eb81f8ff50362de79ef` |
 
 The launcher sets the game up for you: start `ncaabb10.exe`, choose **Set up from a disc image
-(.iso)** and it copies the game into `game/` next to the build's `user/` folder (about 7 GB), checks
-`default.xex` and enables Play. **Use an extracted folder** accepts a folder you extracted yourself
+(.iso)** and it copies the game into `game/` next to the build's `user/` folder (6.2 GB, about a
+minute on an SSD; the launcher shows the speed and time left), checks `default.xex` and enables
+Play. Setup checks for that much free space before it copies anything (the old `game/` stays until
+the new copy verifies, so a reinstall needs the space again). **Use an extracted folder** accepts a folder you extracted yourself
 (the folder with `default.xex`, or the one above it). The copy goes into `game.partial` first and
-replaces `game/` only once `default.xex` verifies, so Cancel (or Esc) leaves an existing setup
+replaces `game/` only once `default.xex` verifies, so Cancel (Esc, or B) leaves an existing setup
 untouched. A damaged or altered image (a looping or oversized file list, file names a real disc
 never has, a short read) stops the setup before anything is written, and if swapping in the new
 copy fails (a file held open by another program), the old `game/` is put back. Game folders with
@@ -38,9 +40,10 @@ python -I tools/xiso.py extract "NCAA Basketball 10 (USA).iso" assets
 
 | Key | Controller | Launcher | In game |
 | --- | --- | --- | --- |
-| Enter | A | Play (or the highlighted button) | (game) |
-| | D-pad, left stick | Move between buttons | (game) |
-| Esc | | Quit | (game) |
+| Enter, Space | A | Press the highlighted button (Play to start with) | (game) |
+| Arrows | D-pad, left stick | Move between buttons | (game) |
+| Esc | | Quit (or cancel disc setup) | (game) |
+| | B | Cancel disc setup | (game) |
 | F1 | Guide, or hold Back and press Start | Options | Options |
 | Esc | B or Start | Close Options | Close Options |
 | F11, Alt+Enter | | Fullscreen | Fullscreen |
@@ -76,7 +79,8 @@ the player name (patched SDK) the game shows on its menus and save screens. Chan
 and are saved to `ncaabb10_options.toml` beside the executable; settings marked * apply after a
 restart (the player name applies on Play when changed from the launcher). Untick "Show this
 launcher at startup" to go straight to the game; hold Shift while starting to see the launcher
-again.
+again. On a large display (fullscreen at 1440p or 4K) the launcher and Options scale up in whole
+steps, so they stay readable from a couch.
 
 ### Saves
 

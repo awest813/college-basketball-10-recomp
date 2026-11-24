@@ -91,6 +91,10 @@ def main():
     images["badname"] = build([(b"default.xex", xex, 0), (b"bad\xff\xfe.bin", small, 0)])
     # A name Windows cannot create.
     images["winname"] = build([(b"default.xex", xex, 0), (b"a<b>.bin", small, 0)])
+    # 60 files of 4 GB that share one sector: more than any free space, so setup must refuse
+    # before copying anything.
+    images["nospace"] = build([(b"default.xex", xex, 0)] +
+                              [(b"big%02d.bin" % i, (34, 0xFFFFF000), 0) for i in range(60)])
     # A good image: the real xex first, then 300 MB of filler (time for a test to lock a file).
     images["good"] = build([(b"default.xex", xex, 0), (b"filler.bin", bytes(300 << 20), 0)])
     for name, data in images.items():

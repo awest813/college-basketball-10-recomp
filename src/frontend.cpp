@@ -386,13 +386,38 @@ std::string FileSha256(const fs::path& path) {
 
 enum class GameCheck { kMissing, kWrongVersion, kOk };
 
+// Hashes default.xex once per file version: the launcher checks the same folder several times.
 GameCheck CheckGameFolder(const fs::path& folder) {
   std::error_code ec;
   const fs::path xex = folder / "default.xex";
   if (folder.empty() || !fs::is_regular_file(xex, ec)) {
     return GameCheck::kMissing;
   }
-  return FileSha256(xex) == kXexSha256 ? GameCheck::kOk : GameCheck::kWrongVersion;
+  struct Seen {
+    uintmax_t size;
+    fs::file_time_type time;
+    GameCheck check;
+  };
+  static std::mutex mutex;
+  static std::map<fs::path, Seen> seen;
+  std::error_code size_ec, time_ec, path_ec;
+  const uintmax_t size = fs::file_size(xex, size_ec);
+  const fs::file_time_type time = fs::last_write_time(xex, time_ec);
+  const fs::path key = fs::absolute(xex, path_ec).lexically_normal();
+  const bool cacheable = !size_ec && !time_ec && !path_ec;
+  if (cacheable) {
+    std::lock_guard lock(mutex);
+    if (auto it = seen.find(key); it != seen.end() && it->second.size == size &&
+                                  it->second.time == time) {
+      return it->second.check;
+    }
+  }
+  const GameCheck check = FileSha256(xex) == kXexSha256 ? GameCheck::kOk : GameCheck::kWrongVersion;
+  if (cacheable) {
+    std::lock_guard lock(mutex);
+    seen[key] = {size, time, check};
+  }
+  return check;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -419,6 +444,8 @@ class DiscExtractor {
   bool Running() const { return thread_.joinable() && !done_; }
   bool Done() const { return done_; }
   bool Failed() const { return failed_; }
+  bool Canceling() const { return cancel_ && !done_; }
+  bool Canceled() const { return cancel_ && failed_; }
   uint64_t BytesDone() const { return bytes_done_; }
   uint64_t BytesTotal() const { return bytes_total_; }
   float Progress() const {
@@ -630,6 +657,20 @@ class DiscExtractor {
     }
     if (!has_xex) {
       return Fail("This disc image has no default.xex.");
+    }
+    // The copy needs its full size free: an existing install stays until the copy verifies.
+    fs::path volume = destination.parent_path();
+    std::error_code space_ec;
+    while (!volume.empty() && !fs::exists(volume, space_ec) && volume.has_relative_path()) {
+      volume = volume.parent_path();
+    }
+    const auto space = fs::space(volume, space_ec);
+    const uint64_t needed = total + (uint64_t(64) << 20);
+    if (!space_ec && space.available < needed) {
+      char text[384];
+      std::snprintf(text, sizeof(text), "Not enough free space in %s: the game needs %.1f GB, "
+                    "%.1f GB is free.", Utf8(volume).c_str(), needed / 1e9, space.available / 1e9);
+      return Fail(text);
     }
     bytes_total_ = total;
     std::vector<char> buffer(16 << 20);
@@ -873,6 +914,38 @@ class PadShortcuts {
 PadShortcuts g_pad_shortcuts;
 
 // ---------------------------------------------------------------------------------------------
+// Size
+//
+// The front end is laid out for a 720p window with the SDK's 10 px pixel font. On a large display
+// (fullscreen at 1440p or 4K) it scales up in whole steps, which keep the pixel font crisp, so it
+// is not a small box in the middle of a TV. Call at the top of each Draw; returns the scale for
+// the explicit sizes the Draw passes to ImGui.
+float ApplyUiScale(const ImGuiIO& io) {
+  static float applied = 0.0f;
+  static ImGuiStyle base;
+  const float fit = std::min(io.DisplaySize.y / 600.0f, io.DisplaySize.x / 1000.0f);
+  const float scale = std::clamp(std::floor(fit), 1.0f, 4.0f);
+  if (scale != applied) {
+    ImGuiStyle& style = ImGui::GetStyle();
+    if (applied == 0.0f) {
+      base = style;  // The SDK's own style, before any scaling.
+    }
+    style = base;
+    style.ScaleAllSizes(scale);
+    style.FontScaleMain = scale;
+    applied = scale;
+  }
+  return scale;
+}
+
+// Wrapped, dimmed text: paths are long and must not run past the window's edge.
+void TextDimWrapped(const std::string& text) {
+  ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+  ImGui::TextWrapped("%s", text.c_str());
+  ImGui::PopStyleColor();
+}
+
+// ---------------------------------------------------------------------------------------------
 // Options overlay
 
 const char* const kAspectRatios[] = {"stretch", "16:9", "16:10", "21:9", "4:3"};
@@ -924,9 +997,10 @@ class OptionsDialog final : public rex::ui::DialogBase {
 
   bool Draw(ImGuiIO& io) override {
     FeedGamepads(io);
+    const float scale = ApplyUiScale(io);
     ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
                             ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(ImVec2(520, 0), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(ImVec2(520 * scale, 0), ImGuiCond_Appearing);
     // Esc, or B or Start on a controller, closes Options. B only when it is not backing out of
     // a list or a slider: last frame nothing was open or being changed. Start not with Back held:
     // Back + Start is the shortcut, which closes Options itself.
@@ -1108,8 +1182,11 @@ class LauncherDialog final : public rex::ui::DialogBase {
       REXLOG_INFO("ncaabb10: disc setup {} after {:.0f} s ({} MB): {}",
                   extractor_->Failed() ? "failed" : "done", seconds,
                   extractor_->BytesDone() >> 20, extractor_->Status());
-      if (extractor_->Failed()) {
-        message_ = extractor_->Status() + " Your settings were not changed; you can try again.";
+      if (extractor_->Canceled()) {
+        message_ = "Setup canceled. Nothing was changed.";
+        message_is_error_ = false;
+      } else if (extractor_->Failed()) {
+        message_ = extractor_->Status() + " Nothing was changed; you can try again.";
         message_is_error_ = true;
       } else {
         folder_ = extract_to_;
@@ -1121,31 +1198,36 @@ class LauncherDialog final : public rex::ui::DialogBase {
     }
 
     FeedGamepads(io);
+    // Arrow keys move between the controls and Enter or Space presses one, as the D-pad and A do.
+    // Without claiming the keyboard: the SDK skips its hotkeys (F1, F11, Alt+Enter) for keys
+    // ImGui claims.
+    // Not while Alt is held: Alt+Enter toggles fullscreen, and ImGui would also take its Enter
+    // as a press of the button under the cursor. Alt goes down before Enter, so the next frame's
+    // navigation already sees it off.
+    if (io.KeyAlt) {
+      io.ConfigFlags &= ~ImGuiConfigFlags_NavEnableKeyboard;
+    } else {
+      io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    }
+    io.ConfigNavCaptureKeyboard = false;
+    const float scale = ApplyUiScale(io);
     const ImVec4 kGood(0.45f, 0.9f, 0.45f, 1), kWarn(1, 0.65f, 0.3f, 1);
     ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
                             ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(ImVec2(640, 0), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(640 * scale, 0), ImGuiCond_Always);
     ImGui::Begin("NCAA Basketball 10##launcher", nullptr,
                  ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                      ImGuiWindowFlags_NoSavedSettings);
-    ImGui::TextUnformatted("NCAA Basketball 10");
-    ImGui::SameLine();
     ImGui::TextDisabled("PC port, recompiled with ReXGlue  |  built %s", __DATE__);
     ImGui::Separator();
     ImGui::Spacing();
+    // Whether keys are for the launcher: not while another window (Options, the F4 settings) has
+    // focus over it; Esc there closes that window instead.
+    const bool keys = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) ||
+                      !ImGui::IsWindowFocused(ImGuiFocusedFlags_AnyWindow);
 
     if (extractor_) {
-      ImGui::TextUnformatted("Copying the game from your disc image...");
-      ImGui::ProgressBar(extractor_->Progress(), ImVec2(-1, 0));
-      ImGui::TextDisabled("%.0f of %.0f MB   %s", extractor_->BytesDone() / 1048576.0,
-                          extractor_->BytesTotal() / 1048576.0, extractor_->Status().c_str());
-      ImGui::TextDisabled("Into %s", Utf8(extract_to_).c_str());
-      const bool focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) ||
-                           !ImGui::IsWindowFocused(ImGuiFocusedFlags_AnyWindow);
-      if (ImGui::Button("Cancel (Esc)", ImVec2(130, 0)) ||
-          (focused && ImGui::IsKeyPressed(ImGuiKey_Escape, false))) {
-        extractor_->Cancel();
-      }
+      DrawSetupProgress(keys, scale);
       ImGui::End();
       return true;
     }
@@ -1162,7 +1244,7 @@ class LauncherDialog final : public rex::ui::DialogBase {
         ImGui::TextColored(kWarn, "The game is not set up yet. Choose your disc image below.");
         break;
     }
-    ImGui::TextDisabled("Game folder: %s", folder_.empty() ? "(none)" : Utf8(folder_).c_str());
+    TextDimWrapped("Game folder: " + (folder_.empty() ? std::string("(none)") : Utf8(folder_)));
     if (!message_.empty()) {
       ImGui::PushStyleColor(ImGuiCol_Text, message_is_error_ ? kWarn : kGood);
       ImGui::TextWrapped("%s", message_.c_str());
@@ -1170,18 +1252,16 @@ class LauncherDialog final : public rex::ui::DialogBase {
     }
     ImGui::Spacing();
 
-    // Enter plays and Esc quits, so no mouse is needed. Not with Alt held (Alt+Enter toggles
-    // fullscreen), and not while another window (Options, the F4 settings) has focus over the
-    // launcher: Esc there closes that window instead. A controller moves between the buttons
-    // with the D-pad and presses one with A; the cursor starts on Play, or on disc setup when
-    // the game is not set up. A with no button picked also plays.
-    const bool keys = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) ||
-                      !ImGui::IsWindowFocused(ImGuiFocusedFlags_AnyWindow);
+    // No mouse is needed: the arrow keys or the D-pad move the cursor, which starts on Play (or on
+    // disc setup when the game is not set up), Enter, Space or A press the button under it, and
+    // Esc quits. Enter or A with no button under the cursor (after a mouse click elsewhere) plays.
+    // Not with Alt held: Alt+Enter toggles fullscreen.
     const bool ok = check_ == GameCheck::kOk;
     const bool play_key =
-        keys && ((!io.KeyAlt && (ImGui::IsKeyPressed(ImGuiKey_Enter, false) ||
-                                 ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false))) ||
-                 (ImGui::IsKeyPressed(ImGuiKey_GamepadFaceDown, false) && !ImGui::IsAnyItemFocused()));
+        keys && !ImGui::IsAnyItemFocused() &&
+        ((!io.KeyAlt && (ImGui::IsKeyPressed(ImGuiKey_Enter, false) ||
+                         ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false))) ||
+         ImGui::IsKeyPressed(ImGuiKey_GamepadFaceDown, false));
     if (keys && ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
       result_ = Result::kQuit;
     }
@@ -1198,8 +1278,9 @@ class LauncherDialog final : public rex::ui::DialogBase {
     if (focus_frames_ > 0) {
       --focus_frames_;
     }
+    const float button_height = 44 * scale;
     ImGui::BeginDisabled(!ok);
-    if (ImGui::Button("Play", ImVec2(200, 44)) || (play_key && ok)) {
+    if (ImGui::Button("Play", ImVec2(200 * scale, button_height)) || (play_key && ok)) {
       REXLOG_INFO("ncaabb10: launcher Play ({}; enter {} keypad {} pad A {} alt {})",
                   play_key ? "key" : "button", ImGui::IsKeyDown(ImGuiKey_Enter),
                   ImGui::IsKeyDown(ImGuiKey_KeypadEnter), ImGui::IsKeyDown(ImGuiKey_GamepadFaceDown),
@@ -1212,14 +1293,15 @@ class LauncherDialog final : public rex::ui::DialogBase {
     }
     ImGui::EndDisabled();
     ImGui::SameLine();
-    if (ImGui::Button("Options", ImVec2(130, 44))) {
+    if (ImGui::Button("Options", ImVec2(130 * scale, button_height))) {
       ui_.ToggleOverlay("options");
     }
     ImGui::SameLine();
-    if (ImGui::Button("Quit", ImVec2(130, 44))) {
+    if (ImGui::Button("Quit", ImVec2(130 * scale, button_height))) {
       result_ = Result::kQuit;
     }
-    ImGui::TextDisabled("Enter / A: Play    Esc: Quit    F1 / Guide: Options    F11 / Alt+Enter: Fullscreen");
+    ImGui::TextDisabled("Arrows / D-pad: move    Enter / A: choose    Esc: Quit");
+    ImGui::TextDisabled("F1 / Guide: Options    F11 / Alt+Enter: Fullscreen");
     if (pads.empty()) {
       ImGui::TextDisabled("No controller found: the keyboard works as one (see Options).");
     } else {
@@ -1256,7 +1338,16 @@ class LauncherDialog final : public rex::ui::DialogBase {
       ImGui::SetTooltip("When off, the game starts directly. Hold Shift while starting to see "
                         "the launcher again.");
     }
+    if (!show) {
+      ImGui::SameLine();
+      ImGui::TextDisabled("(hold Shift while starting to see it again)");
+    }
     ImGui::End();
+    if (result_ != Result::kNone) {
+      // Keyboard navigation is the launcher's: in game the keyboard is the player's controller.
+      io.ConfigFlags &= ~ImGuiConfigFlags_NavEnableKeyboard;
+      io.ConfigNavCaptureKeyboard = true;
+    }
     return result_ == Result::kNone;
   }
 
@@ -1264,6 +1355,47 @@ class LauncherDialog final : public rex::ui::DialogBase {
 
  private:
   void Recheck() { check_ = CheckGameFolder(folder_); }
+
+  void DrawSetupProgress(bool keys, float scale) {
+    ImGui::TextUnformatted("Copying the game from your disc image...");
+    ImGui::ProgressBar(extractor_->Progress(), ImVec2(-1, 0));
+    const double done = static_cast<double>(extractor_->BytesDone());
+    const double total = static_cast<double>(extractor_->BytesTotal());
+    const double seconds =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - extract_start_).count();
+    char line[160];
+    int n = std::snprintf(line, sizeof(line), "%.1f of %.1f GB", done / 1e9, total / 1e9);
+    // Speed and time left once there is enough to go on.
+    if (seconds > 3 && done > 0 && total > done) {
+      const double rate = done / seconds;
+      const int left = static_cast<int>((total - done) / rate) + 1;
+      n += std::snprintf(line + n, sizeof(line) - n, "   %.0f MB/s", rate / 1e6);
+      if (left >= 60) {
+        std::snprintf(line + n, sizeof(line) - n, "   about %d min %02d s left", left / 60, left % 60);
+      } else {
+        std::snprintf(line + n, sizeof(line) - n, "   about %d s left", left);
+      }
+    }
+    ImGui::TextUnformatted(line);
+    TextDimWrapped(extractor_->Status());
+    TextDimWrapped("Into " + Utf8(extract_to_));
+    ImGui::Spacing();
+    // The cursor goes to Cancel, so A presses it; B and Esc cancel too.
+    const bool cancel_key = keys && (ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
+                                     ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false));
+    if (ImGui::Button("Cancel (Esc / B)", ImVec2(160 * scale, 0)) || cancel_key) {
+      extractor_->Cancel();
+    }
+    if (ImGui::IsWindowAppearing() || !ImGui::IsAnyItemFocused()) {
+      ImGui::SetKeyboardFocusHere(-1);
+      ImGui::SetNavCursorVisible(true);
+    }
+    if (extractor_->Canceling()) {
+      ImGui::SameLine();
+      ImGui::TextDisabled("Canceling...");
+    }
+    focus_frames_ = 3;  // Back on the default button once the setup ends.
+  }
 
   static void OpenFolder(const fs::path& folder) {
 #if defined(_WIN32)
@@ -1288,22 +1420,8 @@ class LauncherDialog final : public rex::ui::DialogBase {
     StartSetup(chosen->front());
   }
 
+  // The extractor checks the free space once it knows the game's size from the disc's file list.
   void StartSetup(const fs::path& iso) {
-    std::error_code ec;
-    fs::create_directories(default_folder_, ec);
-    const auto space = fs::space(fs::exists(default_folder_, ec) ? default_folder_
-                                                                 : default_folder_.parent_path(),
-                                 ec);
-    if (!ec && space.available < (uint64_t(7) << 30)) {
-      char text[512];
-      std::snprintf(text, sizeof(text),
-                    "About 7 GB of free space is needed for the copied game in %s (%.1f GB free).",
-                    Utf8(default_folder_).c_str(), space.available / 1073741824.0);
-      message_ = text;
-      REXLOG_WARN("ncaabb10: disc setup: {}", message_);
-      message_is_error_ = true;
-      return;
-    }
     extract_to_ = default_folder_;
     message_.clear();
     REXLOG_INFO("ncaabb10: disc setup from {} into {}", Utf8(iso), Utf8(extract_to_));

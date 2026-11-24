@@ -65,6 +65,14 @@ void PushWindowKey(unsigned vk, bool alt) {
     scancode = SDL_SCANCODE_ESCAPE;
   } else if (vk >= 'A' && vk <= 'Z') {
     scancode = static_cast<SDL_Scancode>(SDL_SCANCODE_A + (vk - 'A'));
+  } else if (vk == 0x20) {
+    scancode = SDL_SCANCODE_SPACE;
+  } else if (vk == 0x09) {
+    scancode = SDL_SCANCODE_TAB;
+  } else if (vk >= 0x25 && vk <= 0x28) {  // Left, up, right, down.
+    static constexpr SDL_Scancode kArrows[] = {SDL_SCANCODE_LEFT, SDL_SCANCODE_UP,
+                                               SDL_SCANCODE_RIGHT, SDL_SCANCODE_DOWN};
+    scancode = kArrows[vk - 0x25];
   }
   int count = 0;
   SDL_Window** windows = SDL_GetWindows(&count);
@@ -75,16 +83,25 @@ void PushWindowKey(unsigned vk, bool alt) {
   const SDL_WindowID window = SDL_GetWindowID(windows[0]);
   SDL_free(windows);
   const SDL_Keymod mod = alt ? SDL_KMOD_LALT : SDL_KMOD_NONE;
-  for (bool down : {true, false}) {
+  auto push = [&](SDL_Scancode code, bool down, SDL_Keymod with) {
     SDL_Event event{};
     event.type = down ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
     event.key.windowID = window;
-    event.key.scancode = scancode;
-    event.key.key = SDL_GetKeyFromScancode(scancode, mod, false);
-    event.key.mod = mod;
+    event.key.scancode = code;
+    event.key.key = SDL_GetKeyFromScancode(code, with, false);
+    event.key.mod = with;
     event.key.down = down;
     SDL_PushEvent(&event);
     std::this_thread::sleep_for(std::chrono::milliseconds(80));
+  };
+  // A held Alt goes down before the key and up after it, as on a keyboard.
+  if (alt) {
+    push(SDL_SCANCODE_LALT, true, mod);
+  }
+  push(scancode, true, mod);
+  push(scancode, false, mod);
+  if (alt) {
+    push(SDL_SCANCODE_LALT, false, SDL_KMOD_NONE);
   }
 }
 
