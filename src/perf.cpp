@@ -24,6 +24,7 @@
 #include <tlhelp32.h>
 #else
 #include <dlfcn.h>
+#include <sys/syscall.h>
 #include <unistd.h>
 #include <sys/resource.h>
 #endif
@@ -35,7 +36,7 @@ uint64_t LogThreadId() {
 #if defined(_WIN32)
   return GetCurrentThreadId();
 #else
-  return static_cast<uint64_t>(gettid());
+  return static_cast<uint64_t>(syscall(SYS_gettid));  // gettid() needs glibc 2.30.
 #endif
 }
 
@@ -246,17 +247,15 @@ struct FrameStats {
   }
 };
 
-FrameStats g_stats;
+// Never destroyed: the monitor thread is detached and may still run while statics are torn down.
+FrameStats& g_stats = *new FrameStats;
 
 }  // namespace
 
 // KeDelayExecutionThread(mode, alertable, LARGE_INTEGER* interval): the title's Sleep. Counted so
 // the perf log shows how much of a load is spent sleeping.
 REX_HOOK_RAW(__imp__KeDelayExecutionThread) {
-  static Func original = nullptr;
-  if (!original) {
-    original = Original("__imp__KeDelayExecutionThread");
-  }
+  static const Func original = Original("__imp__KeDelayExecutionThread");
   if (PerfEnabled() && ctx.r5.u32) {
     uint64_t raw;
     std::memcpy(&raw, base + ctx.r5.u32, sizeof(raw));
@@ -295,10 +294,7 @@ REX_HOOK_RAW(__imp__KeDelayExecutionThread) {
 
 // VdSwap is the title's present: one call per guest frame.
 REX_HOOK_RAW(__imp__VdSwap) {
-  static Func original = nullptr;
-  if (!original) {
-    original = Original("__imp__VdSwap");
-  }
+  static const Func original = Original("__imp__VdSwap");
   if (PerfEnabled()) {
     g_stats.OnPresent();
   }

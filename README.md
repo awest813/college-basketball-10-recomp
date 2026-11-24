@@ -22,9 +22,9 @@ Only this executable is supported (the analysis config is tied to it):
 The launcher sets the game up for you: start `ncaabb10.exe`, choose **Set up from a disc image
 (.iso)** and it copies the game into `game/` next to the build's `user/` folder (about 7 GB), checks
 `default.xex` and enables Play. **Use an extracted folder** accepts a folder you extracted yourself
-(the folder with `default.xex`, or the one above it). The copy goes into `game.partial` first and replaces `game/`
-only once `default.xex` verifies, so Cancel (or Esc) leaves an existing setup untouched. For development, extracting into `assets/`
-works too:
+(the folder with `default.xex`, or the one above it). The copy goes into `game.partial` first and
+replaces `game/` only once `default.xex` verifies, so Cancel (or Esc) leaves an existing setup
+untouched. For development, extracting into `assets/` works too:
 
 ```
 python -I tools/xiso.py extract "NCAA Basketball 10 (USA).iso" assets
@@ -87,17 +87,22 @@ you must be signed in to Xbox Live, as the console does offline.
 
 ## Building on Windows
 
-Needs Visual Studio 2022 or its Build Tools (MSVC + Windows SDK), CMake 3.25+, Ninja, a clang++ on
-PATH (tested with clang 22) and the ReXGlue SDK 0.11.0 at the path in `CMakePresets.json`.
-The preset makes clang target `x86_64-pc-windows-msvc` and link with `link.exe`, because the SDK
-binaries use the MSVC ABI; `build_win.cmd` sets up the Visual Studio environment first.
+Needs Visual Studio 2022 or its Build Tools (MSVC + Windows SDK), CMake 3.25+, Ninja and a clang++
+on PATH (tested with clang 22). The presets make clang target `x86_64-pc-windows-msvc` and link with
+`link.exe`, because the SDK binaries use the MSVC ABI; `build_win.cmd` sets up the Visual Studio
+environment first.
 
 ```
 build_win.cmd release
-run_win.cmd release
+run_win.cmd
 ```
 
-Saves go to `out/build/win-amd64/<config>/user/` (see Saves above); the console's utility
+Both default to the `win-amd64-patched` preset, which builds against the patched SDK in
+`..\rexglue-sdk-src` (Release only; see Patched SDK below). `build_win.cmd debug 14 win-amd64` and
+`run_win.cmd stock debug` use the stock SDK 0.11.0 release instead, unpacked beside this folder as
+`rexglue-sdk-0.11.0-win-amd64/win-amd64`; it still has the bugs the patches fix.
+
+Saves go to `out/build/win-amd64-patched/Release/user/` (see Saves above); the console's utility
 drive (`cache:`) is backed by `user/cache/`.
 
 Codegen runs as part of the build (about 2 minutes, 50k functions, ~270 MB of C++); the first

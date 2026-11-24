@@ -1,7 +1,8 @@
 @echo off
 rem Runs the game. Usage: run_win.cmd [patched|stock] [release|debug] [--scope.setting=value ...]
 rem Default: the patched-SDK Release build (build_win.cmd release 12 win-amd64-patched). The stock
-rem SDK build still has the missing-text and dirty-disc bugs fixed in patches\ and is only for Debug.
+rem SDK build still has the bugs fixed in patches\ (missing text, dirty-disc freeze, dcbz) and is
+rem only for Debug.
 setlocal
 set ROOT=%~dp0
 set BUILD=win-amd64-patched

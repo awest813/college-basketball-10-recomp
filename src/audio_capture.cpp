@@ -10,6 +10,7 @@
 #include <mutex>
 #include <string>
 
+#include <rex/logging/log_category.h>
 #include <rex/ppc/hook.h>
 #include <rex/types.h>
 
@@ -47,6 +48,7 @@ Func Original(const char* name) {
 constexpr int kChannels = 6;
 constexpr int kFrameSamples = 256;
 constexpr int kSampleRate = 48000;
+constexpr uint64_t kMaxDataBytes = 0xFFFFFFFFull - 36;
 
 class WavWriter {
  public:
@@ -61,12 +63,19 @@ class WavWriter {
     if (!file_) {
       return;
     }
-    std::fwrite(interleaved, sizeof(float), samples, file_);
-    data_bytes_ += static_cast<uint32_t>(samples * sizeof(float));
-    if (++frames_ % (kSampleRate / kFrameSamples) == 0) {  // About once a second.
-      const long end = std::ftell(file_);
+    const uint64_t bytes = samples * sizeof(float);
+    if (data_bytes_ + bytes > kMaxDataBytes) {  // A WAV's sizes are 32-bit: stop at about 4 GiB.
       WriteHeader();
-      std::fseek(file_, end, SEEK_SET);
+      std::fclose(file_);
+      file_ = nullptr;
+      REXLOG_INFO("ncaabb10: audio capture stopped at the WAV size limit");
+      return;
+    }
+    std::fwrite(interleaved, sizeof(float), samples, file_);
+    data_bytes_ += static_cast<uint32_t>(bytes);
+    if (++frames_ % (kSampleRate / kFrameSamples) == 0) {  // About once a second.
+      WriteHeader();
+      std::fseek(file_, 0, SEEK_END);  // Not ftell: a long is 32-bit on Windows.
       std::fflush(file_);
     }
   }
@@ -108,10 +117,7 @@ WavWriter* Writer() {
 
 // XAudioSubmitRenderDriverFrame(driver, samples)
 REX_HOOK_RAW(__imp__XAudioSubmitRenderDriverFrame) {
-  static Func original = nullptr;
-  if (!original) {
-    original = Original("__imp__XAudioSubmitRenderDriverFrame");
-  }
+  static const Func original = Original("__imp__XAudioSubmitRenderDriverFrame");
   if (WavWriter* writer = Writer(); writer && ctx.r4.u32) {
     float interleaved[kFrameSamples * kChannels];
     const uint8_t* planar = base + ctx.r4.u32;

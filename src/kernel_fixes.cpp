@@ -44,12 +44,11 @@ Func Original(const char* name) {
 #endif
 }
 
-void CallOriginal(const char* name, Func& cache, PPCContext& ctx, uint8_t* base) {
-  if (!cache) {
-    cache = Original(name);
-  }
-  if (cache) {
-    cache(ctx, base);
+void CallOriginal(Func original, PPCContext& ctx, uint8_t* base) {
+  if (original) {
+    original(ctx, base);
+  } else {
+    ctx.r3.u64 = rex::kernel::X_STATUS_NOT_IMPLEMENTED;
   }
 }
 
@@ -62,19 +61,20 @@ void StoreBE32(uint8_t* base, uint32_t address, uint32_t value) {
 
 // NtQueryInformationFile(handle, X_IO_STATUS_BLOCK* io, void* info, u32 length, u32 class)
 //
-// The SDK logs XFileSectorInformation as unimplemented and fails it. EA's streaming asks for the
-// disc sector a file starts on (it orders reads by disc position), many times per load. Answer
-// with a stable pseudo sector per open file and success, as Xenia and the Skate 3 SDK fork do
-// (they hash the path; the handle is enough for ordering reads within a session).
+// EA's streaming asks for the disc sector a file starts on (it orders reads by disc position),
+// many times per load. SDK 0.11.0 answers XFileSectorInformation through a stub that logs a
+// warning on every call and returns a full 32-bit path hash. Answer here with a stable pseudo
+// sector per open file, kept within a DVD's sector range, and no log (as Xenia and the Skate 3 SDK
+// fork do; they hash the path, the handle is enough for ordering reads within a session).
 REX_HOOK_RAW(__imp__NtQueryInformationFile) {
-  static Func original = nullptr;
+  static const Func original = Original("__imp__NtQueryInformationFile");
   const uint32_t handle = ctx.r3.u32;
   const uint32_t io_status = ctx.r4.u32;
   const uint32_t info = ctx.r5.u32;
   const uint32_t length = ctx.r6.u32;
   const uint32_t info_class = ctx.r7.u32;
   if (info_class != rex::kernel::XFileSectorInformation) {
-    return CallOriginal("__imp__NtQueryInformationFile", original, ctx, base);
+    return CallOriginal(original, ctx, base);
   }
   if (length < 4 || !info) {
     ctx.r3.u64 = rex::kernel::X_STATUS_INFO_LENGTH_MISMATCH;

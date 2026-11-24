@@ -67,6 +67,9 @@ class Sampler {
       const auto now = std::chrono::steady_clock::now();
       if (now - last_refresh > std::chrono::seconds(1)) {
         RefreshThreads(self);
+        if (callers_) {
+          RefreshModules();
+        }
         last_refresh = now;
       }
       for (auto& [tid, slot] : threads_) {
@@ -83,9 +86,11 @@ class Sampler {
           continue;
         }
         const BOOL got = GetThreadContext(slot.handle, &context);
-        uint64_t caller = 0;
+        uintptr_t caller_rip = 0;
         if (got && callers_ && !IsOurs(context.Rip)) {
-          caller = Caller(context);  // While suspended: the walk reads the thread's stack.
+          // While suspended, as the walk reads the thread's stack; it takes no lock and allocates
+          // nothing, since the suspended thread may hold the loader or heap lock.
+          caller_rip = CallerRip(context);
         }
         ResumeThread(slot.handle);
         if (got) {
@@ -93,8 +98,8 @@ class Sampler {
           const uint64_t key = Key(context.Rip);
           slot.hits[key] += used;
           slot.samples += used;
-          if (caller) {
-            slot.via[{key, caller}] += used;
+          if (caller_rip) {
+            slot.via[{key, Key(caller_rip)}] += used;
           }
         }
       }
@@ -126,29 +131,39 @@ class Sampler {
     }
   }
 
-  // Whether the address is in the executable (recompiled or host code) or an SDK module.
-  bool IsOurs(uintptr_t rip) {
-    HMODULE module = nullptr;
-    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
-                                GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                            reinterpret_cast<LPCWSTR>(rip), &module)) {
-      return false;
+  // The address ranges of the executable and the SDK modules, sorted, rebuilt with the thread list
+  // while no thread is suspended.
+  void RefreshModules() {
+    HMODULE modules[1024];
+    DWORD bytes = 0;
+    if (!EnumProcessModules(GetCurrentProcess(), modules, sizeof(modules), &bytes)) {
+      return;
     }
-    auto it = ours_.find(module);
-    if (it != ours_.end()) {
-      return it->second;
+    ours_.clear();
+    const HMODULE exe = GetModuleHandleW(nullptr);
+    for (DWORD i = 0; i < bytes / sizeof(HMODULE) && i < 1024; ++i) {
+      wchar_t path[MAX_PATH] = {};
+      GetModuleFileNameW(modules[i], path, MAX_PATH);
+      const wchar_t* file = wcsrchr(path, L'\\');
+      file = file ? file + 1 : path;
+      MODULEINFO info{};
+      if ((modules[i] == exe || _wcsnicmp(file, L"rex", 3) == 0) &&
+          GetModuleInformation(GetCurrentProcess(), modules[i], &info, sizeof(info))) {
+        const auto begin = reinterpret_cast<uintptr_t>(info.lpBaseOfDll);
+        ours_.push_back({begin, begin + info.SizeOfImage});
+      }
     }
-    wchar_t path[MAX_PATH] = {};
-    GetModuleFileNameW(module, path, MAX_PATH);
-    const wchar_t* file = wcsrchr(path, L'\\');
-    file = file ? file + 1 : path;
-    const bool ours = module == GetModuleHandleW(nullptr) || _wcsnicmp(file, L"rex", 3) == 0;
-    ours_.emplace(module, ours);
-    return ours;
+    std::sort(ours_.begin(), ours_.end());
   }
 
-  // The key of the nearest frame up the stack that is game or SDK code, or 0.
-  uint64_t Caller(CONTEXT context) {
+  // Whether the address is in the executable (recompiled or host code) or an SDK module. Lock free.
+  bool IsOurs(uintptr_t rip) const {
+    auto it = std::upper_bound(ours_.begin(), ours_.end(), std::pair{rip, UINTPTR_MAX});
+    return it != ours_.begin() && rip < std::prev(it)->second;
+  }
+
+  // The address of the nearest frame up the stack that is game or SDK code, or 0.
+  uintptr_t CallerRip(CONTEXT context) const {
     for (int depth = 0; depth < 32; ++depth) {
       DWORD64 image_base = 0;
       PRUNTIME_FUNCTION function = RtlLookupFunctionEntry(context.Rip, &image_base, nullptr);
@@ -166,7 +181,7 @@ class Sampler {
         return 0;
       }
       if (IsOurs(context.Rip)) {
-        return Key(context.Rip);
+        return context.Rip;
       }
     }
     return 0;
@@ -231,6 +246,17 @@ class Sampler {
   }
 
   void RefreshThreads(DWORD self) {
+    // Drop threads that have exited (their ids can be reused), after reporting what they used.
+    for (auto it = threads_.begin(); it != threads_.end();) {
+      DWORD code = 0;
+      if (GetExitCodeThread(it->second.handle, &code) && code != STILL_ACTIVE &&
+          it->second.samples == 0) {
+        CloseHandle(it->second.handle);
+        it = threads_.erase(it);
+      } else {
+        ++it;
+      }
+    }
     HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
     if (snapshot == INVALID_HANDLE_VALUE) {
       return;
@@ -324,7 +350,7 @@ class Sampler {
 
   std::vector<GuestFunction> functions_;
   bool callers_ = false;
-  std::unordered_map<HMODULE, bool> ours_;
+  std::vector<std::pair<uintptr_t, uintptr_t>> ours_;  // [begin, end) of our modules, sorted.
   bool symbols_ = false;
   std::unordered_map<uint64_t, std::string> symbol_names_;
   uintptr_t code_begin_ = 0, code_end_ = 0;

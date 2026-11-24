@@ -109,30 +109,31 @@ REX_HOOK_RAW(sub_826C0388) {
 namespace {
 std::atomic<uint64_t> g_reads{0};
 
-// Calls an SDK kernel export on a copy of the context with r3 = arg and returns r3.
-uint32_t CallExport(const char* name, Func& cache, const PPCContext& ctx, uint8_t* base, uint32_t arg) {
-  if (!cache) {
-    cache = Original(name);
-  }
-  if (!cache) {
+// Calls an SDK kernel export with r3 = arg on the thread's own context (the SDK checks that an
+// export runs on it) and returns its r3, leaving r3 as it was.
+uint32_t CallExport(Func function, PPCContext& ctx, uint8_t* base, uint32_t arg) {
+  if (!function) {
     return 0xFFFFFFFF;
   }
-  PPCContext copy = ctx;
-  copy.r3.u64 = arg;
-  cache(copy, base);
-  return copy.r3.u32;
+  const uint64_t saved_r3 = ctx.r3.u64;
+  ctx.r3.u64 = arg;
+  function(ctx, base);
+  const uint32_t result = ctx.r3.u32;
+  ctx.r3.u64 = saved_r3;
+  return result;
 }
 
 // Logs the guest protection of every 4 KiB page of a range, as runs, and the allocation size
 // the kernel reports at the start and end of the range.
-void DumpPages(const PPCContext& ctx, uint8_t* base, uint32_t buffer, uint32_t length) {
-  static Func query_protect = nullptr, query_size = nullptr;
+void DumpPages(PPCContext& ctx, uint8_t* base, uint32_t buffer, uint32_t length) {
+  static const Func query_protect = Original("__imp__MmQueryAddressProtect");
+  static const Func query_size = Original("__imp__MmQueryAllocationSize");
   const uint32_t first = buffer & ~0xFFFu, last = (buffer + length - 1) & ~0xFFFu;
   std::string runs;
   uint32_t run_start = first, run_protect = 0;
   for (uint32_t page = first;; page += 0x1000) {
     const uint32_t protect =
-        CallExport("__imp__MmQueryAddressProtect", query_protect, ctx, base, page);
+        CallExport(query_protect, ctx, base, page);
     if (page == first) {
       run_protect = protect;
     } else if (protect != run_protect) {
@@ -146,15 +147,19 @@ void DumpPages(const PPCContext& ctx, uint8_t* base, uint32_t buffer, uint32_t l
     }
   }
   REXLOG_WARN("ncaabb10: failed read pages{} alloc_size(start)={:#x} alloc_size(end)={:#x}", runs,
-              CallExport("__imp__MmQueryAllocationSize", query_size, ctx, base, buffer),
-              CallExport("__imp__MmQueryAllocationSize", query_size, ctx, base, buffer + length - 1));
+              CallExport(query_size, ctx, base, buffer),
+              CallExport(query_size, ctx, base, buffer + length - 1));
 }
 
-void TimedRead(const char* name, Func& original, PPCContext& ctx, uint8_t* base) {
-  if (!original) {
-    original = Original(name);
-    REXLOG_INFO("ncaabb10: {} hook active, original {}", name + 7, original ? "found" : "MISSING");
-  }
+// The SDK export a read hook forwards to, logged once.
+Func ReadOriginal(const char* name) {
+  const Func original = Original(name);
+  REXLOG_INFO("ncaabb10: {} hook active, original {}", name + 7, original ? "found" : "MISSING");
+  return original;
+}
+
+// NtReadFileScatter's r8 is its segment array, not a buffer; only NtReadFile's buffer is dumped.
+void TimedRead(const char* name, Func original, bool scatter, PPCContext& ctx, uint8_t* base) {
   ++g_reads;
   const uint32_t handle = ctx.r3.u32, io_status = ctx.r7.u32, buffer = ctx.r8.u32,
                  length = ctx.r9.u32, offset_ptr = ctx.r10.u32;
@@ -176,7 +181,7 @@ void TimedRead(const char* name, Func& original, PPCContext& ctx, uint8_t* base)
     REXLOG_WARN("ncaabb10: {} h={:08X} buf={:08X} len={:#x} off={:#x} -> {:08X} io=({:08X}, {:#x}) {:.1f} ms",
                 name + 7, handle, buffer, length, offset, status, io_result, io_info, ms);
   }
-  if (status == 0xC0000005 && buffer && length) {
+  if (status == 0xC0000005 && buffer && length && !scatter) {
     REXLOG_WARN("ncaabb10: failed read stack {}", GuestBacktrace(base, caller_sp, caller_lr));
     DumpPages(ctx, base, buffer, length);
   }
@@ -198,10 +203,7 @@ bool TracePhysical() {
 
 // MmAllocatePhysicalMemoryEx(flags, size, protect, min, max, alignment) -> address.
 REX_HOOK_RAW(__imp__MmAllocatePhysicalMemoryEx) {
-  static Func original = nullptr;
-  if (!original) {
-    original = Original("__imp__MmAllocatePhysicalMemoryEx");
-  }
+  static const Func original = Original("__imp__MmAllocatePhysicalMemoryEx");
   const uint32_t size = ctx.r4.u32, protect = ctx.r5.u32, alignment = ctx.r8.u32;
   const uint32_t caller_lr = ctx.lr;
   original(ctx, base);
@@ -213,10 +215,7 @@ REX_HOOK_RAW(__imp__MmAllocatePhysicalMemoryEx) {
 
 // MmFreePhysicalMemory(type, address).
 REX_HOOK_RAW(__imp__MmFreePhysicalMemory) {
-  static Func original = nullptr;
-  if (!original) {
-    original = Original("__imp__MmFreePhysicalMemory");
-  }
+  static const Func original = Original("__imp__MmFreePhysicalMemory");
   if (TracePhysical()) {
     REXLOG_INFO("ncaabb10: phys free {:08X} type={} (lr {:08X})", ctx.r4.u32, ctx.r3.u32, ctx.lr);
   }
@@ -224,11 +223,11 @@ REX_HOOK_RAW(__imp__MmFreePhysicalMemory) {
 }
 
 REX_HOOK_RAW(__imp__NtReadFile) {
-  static Func original = nullptr;
-  TimedRead("__imp__NtReadFile", original, ctx, base);
+  static const Func original = ReadOriginal("__imp__NtReadFile");
+  TimedRead("__imp__NtReadFile", original, false, ctx, base);
 }
 
 REX_HOOK_RAW(__imp__NtReadFileScatter) {
-  static Func original = nullptr;
-  TimedRead("__imp__NtReadFileScatter", original, ctx, base);
+  static const Func original = ReadOriginal("__imp__NtReadFileScatter");
+  TimedRead("__imp__NtReadFileScatter", original, true, ctx, base);
 }

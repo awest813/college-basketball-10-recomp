@@ -17,6 +17,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <string>
 #include <thread>
@@ -31,6 +32,7 @@
 #include <rex/path_settings.h>
 #include <rex/setting.h>
 #include <rex/settings_registry.h>
+#include <rex/string/text.h>
 #include <rex/ui/dialog.h>
 #include <rex/ui/ui_event.h>
 #include <rex/ui/ui_system.h>
@@ -86,9 +88,11 @@ std::string GetText(std::string_view name) {
 }
 
 // The player's choices live in ncaabb10_options.toml next to the config file: only the settings
-// changed through the launcher or Options, so project defaults keep applying to everything else
-// (the SDK's Save writes every non-default value, command line ones included).
-std::set<std::string> g_user_settings;
+// changed through the launcher or Options, so project defaults keep applying to everything else.
+// Each is kept as the player set it (its TOML value text), never as the effective value, so command
+// line and environment overrides are not saved; entries this build does not know (another GPU
+// backend's settings) are carried through unchanged.
+std::map<std::string, std::string> g_user_values;
 // Values for settings that can no longer change in this run (kUntilLaunch ones once the title
 // runs): saved to the file now, applied on the next start.
 std::map<std::string, std::string> g_next_start;
@@ -97,19 +101,69 @@ fs::path OptionsFile() {
   return REX_PATHS().config_file.Get().parent_path() / "ncaabb10_options.toml";
 }
 
-void Save() {
-  if (!g_registry) {
-    return;
+// A path as UTF-8 text, for display and logs. fs::path::string() converts to the ANSI code page on
+// Windows and throws for characters outside it.
+std::string Utf8(const fs::path& path) { return rex::string::PathToUTF8(path); }
+
+// A path as the text the SDK's path settings parse (the native narrow encoding), or nothing when
+// the path has characters that encoding cannot hold.
+std::optional<std::string> NativeText(const fs::path& path) {
+  try {
+    return path.string();
+  } catch (const std::exception&) {
+    return std::nullopt;
   }
-  std::map<std::string, std::vector<std::string>> sections;
-  for (const std::string& name : g_user_settings) {
-    auto found = g_registry->Find(name);
-    if (!found) {
-      continue;
+}
+
+std::string Trim(std::string_view text) {
+  const size_t first = text.find_first_not_of(" \t\r");
+  if (first == std::string_view::npos) {
+    return {};
+  }
+  const size_t last = text.find_last_not_of(" \t\r");
+  return std::string(text.substr(first, last - first + 1));
+}
+
+// A TOML basic string.
+std::string TomlString(std::string_view text) {
+  std::string out = "\"";
+  for (const char c : text) {
+    if (static_cast<unsigned char>(c) < 0x20) {
+      continue;  // No setting holds control characters.
     }
-    const size_t dot = name.rfind('.');
-    const auto next = g_next_start.find(name);
-    std::string text = next != g_next_start.end() ? next->second : (*found)->GetText();
+    if (c == '\\' || c == '"') {
+      out += '\\';
+    }
+    out += c;
+  }
+  return out + "\"";
+}
+
+// The setting text a TOML value in the options file stands for: bare, 'literal' or "basic" (with
+// the \\ and \" escapes TomlString writes).
+std::string TomlValueText(std::string_view value) {
+  if (value.size() >= 2 && value.front() == '\'' && value.back() == '\'') {
+    return std::string(value.substr(1, value.size() - 2));
+  }
+  if (value.size() >= 2 && value.front() == '"' && value.back() == '"') {
+    std::string out;
+    for (size_t i = 1; i + 1 < value.size(); ++i) {
+      if (value[i] == '\\' && i + 2 < value.size()) {
+        ++i;
+      }
+      out += value[i];
+    }
+    return out;
+  }
+  return std::string(value);
+}
+
+// The TOML value for a setting's text: bare for numbers and booleans, a string otherwise.
+std::string TomlValue(std::string_view name, std::string_view text) {
+  if (!g_registry) {
+    return TomlString(text);
+  }
+  if (auto found = g_registry->Find(name); found) {
     switch ((*found)->GetType()) {
       case rex::SettingType::kBool:
       case rex::SettingType::kI32:
@@ -117,21 +171,27 @@ void Save() {
       case rex::SettingType::kU32:
       case rex::SettingType::kU64:
       case rex::SettingType::kF64:
-        break;
+        return std::string(text);
       default:
-        if (text.size() >= 2 && text.front() == '"' && text.back() == '"') {
-          text = text.substr(1, text.size() - 2);
-        }
-        if (text.find('\'') != std::string::npos) {
-          continue;  // A TOML literal string cannot hold a quote; skip rather than corrupt.
-        }
-        text = "'" + text + "'";
         break;
     }
-    sections[name.substr(0, dot)].push_back(name.substr(dot + 1) + " = " + text);
+  }
+  return TomlString(text);
+}
+
+void Save() {
+  std::map<std::string, std::vector<std::string>> sections;
+  for (const auto& [name, value] : g_user_values) {
+    const size_t dot = name.rfind('.');
+    if (dot == std::string::npos) {
+      continue;
+    }
+    sections[name.substr(0, dot)].push_back(name.substr(dot + 1) + " = " + value);
   }
   const fs::path path = OptionsFile();
-  const fs::path temp = path.string() + ".tmp";
+  fs::path temp = path;
+  temp += ".tmp";
+  std::error_code ec;
   {
     std::ofstream out(temp, std::ios::trunc);
     out << "# NCAA Basketball 10 options, written by the launcher and the Options overlay (F1).\n";
@@ -141,34 +201,47 @@ void Save() {
         out << line << "\n";
       }
     }
+    // The file is small enough to sit in the stream's buffer, so errors show up only on close.
+    out.close();
     if (!out) {
-      REXLOG_WARN("ncaabb10: could not write {}", temp.string());
+      REXLOG_WARN("ncaabb10: could not write {}; the options stay as they were", Utf8(temp));
+      fs::remove(temp, ec);
       return;
     }
   }
-  std::error_code ec;
   fs::rename(temp, path, ec);
   if (ec) {
-    REXLOG_WARN("ncaabb10: could not replace {}: {}", path.string(), ec.message());
+    REXLOG_WARN("ncaabb10: could not replace {}: {}", Utf8(path), ec.message());
   }
 }
 
-// Reads the names saved in the options file (the one format this file writes).
-void LoadUserSettingNames() {
+// Applies the options file (the format Save writes) entry by entry at the config file layer, so the
+// environment and the command line still win. A value this build refuses is reported and dropped;
+// the entries after it still apply.
+void LoadUserSettings(rex::SettingsRegistry& settings) {
   std::ifstream in(OptionsFile());
   std::string line, section;
   while (std::getline(in, line)) {
+    line = Trim(line);
     if (line.empty() || line[0] == '#') {
       continue;
     }
     if (line[0] == '[') {
-      section = line.substr(1, line.find(']') - 1);
+      section = Trim(line.substr(1, line.find(']') - 1));
       continue;
     }
-    const size_t eq = line.find(" = ");
-    if (eq != std::string::npos && !section.empty()) {
-      g_user_settings.insert(section + "." + line.substr(0, eq));
+    const size_t eq = line.find('=');
+    if (eq == std::string::npos || section.empty()) {
+      continue;
     }
+    const std::string name = section + "." + Trim(line.substr(0, eq));
+    const std::string value = Trim(line.substr(eq + 1));
+    if (auto set = settings.SetText(rex::SettingLayer::kFile, name, TomlValueText(value)); !set) {
+      REXLOG_WARN("ncaabb10: {} refused {} = {} ({}); dropping it", Utf8(OptionsFile()), name, value,
+                  set.error().GetDescription());
+      continue;
+    }
+    g_user_values[name] = value;
   }
 }
 
@@ -180,7 +253,7 @@ void SetAndSave(std::string_view name, std::string_view text) {
   if (found && (*found)->IsFrozen() && (*found)->Check(text)) {
     REXLOG_INFO("ncaabb10: option {} = {} (on the next start)", name, text);
     g_next_start[std::string(name)] = std::string(text);
-    g_user_settings.insert(std::string(name));
+    g_user_values[std::string(name)] = TomlValue(name, text);
     Save();
     return;
   }
@@ -189,7 +262,7 @@ void SetAndSave(std::string_view name, std::string_view text) {
     return;
   }
   REXLOG_INFO("ncaabb10: option {} = {}", name, text);
-  g_user_settings.insert(std::string(name));
+  g_user_values[std::string(name)] = TomlValue(name, text);
   Save();
 }
 
@@ -367,6 +440,7 @@ class DiscExtractor {
   };
 
   static constexpr uint64_t kSector = 2048;
+  std::set<uint32_t> walked_;  // Directory sectors read, so a looping image cannot recurse forever.
 
   void SetStatus(std::string text) {
     std::lock_guard lock(mutex_);
@@ -380,27 +454,50 @@ class DiscExtractor {
 
   // Extracts into <destination>.partial and swaps it in only once default.xex verifies, so a
   // canceled or failed copy never leaves a half-written game folder behind.
+  // A rename can fail for a moment while an antivirus scanner still holds a freshly written file.
+  static void RenameRetrying(const fs::path& from, const fs::path& to, std::error_code& ec) {
+    for (int attempt = 0; attempt < 20; ++attempt) {
+      fs::rename(from, to, ec);
+      if (!ec) {
+        return;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(250));
+    }
+  }
+
   void Run(fs::path iso, fs::path destination) {
     fs::path work = destination;
     work += ".partial";
     fs::path old = destination;
     old += ".old";
     std::error_code ec;
-    fs::remove_all(work, ec);
-    Extract(iso, work);
-    if (!failed_) {
-      fs::remove_all(old, ec);
-      if (fs::exists(destination, ec)) {
-        fs::rename(destination, old, ec);
-      }
-      if (!ec) {
-        fs::rename(work, destination, ec);
-      }
-      if (ec) {
-        Fail("Could not move the copied game into " + destination.string() + ": " + ec.message());
-      } else {
+    try {
+      fs::remove_all(work, ec);
+      Extract(iso, work);
+      if (!failed_) {
         fs::remove_all(old, ec);
+        const bool had_install = fs::exists(destination, ec);
+        ec.clear();
+        if (had_install) {
+          RenameRetrying(destination, old, ec);
+        }
+        if (ec) {
+          Fail("Could not replace the game in " + Utf8(destination) + ": " + ec.message());
+        } else {
+          RenameRetrying(work, destination, ec);
+          if (ec) {
+            Fail("Could not move the copied game into " + Utf8(destination) + ": " + ec.message());
+            if (had_install) {
+              std::error_code restore_ec;
+              RenameRetrying(old, destination, restore_ec);  // Put the old install back.
+            }
+          } else {
+            fs::remove_all(old, ec);
+          }
+        }
       }
+    } catch (const std::exception& e) {
+      Fail(std::string("Disc setup stopped: ") + e.what());
     }
     if (failed_) {
       fs::remove_all(work, ec);
@@ -413,6 +510,10 @@ class DiscExtractor {
             std::vector<Entry>& out, int depth) {
     if (size == 0 || depth > 32) {
       return true;
+    }
+    // A real directory table is a few sectors; a damaged one must not loop or exhaust memory.
+    if (size > (16u << 20) || !walked_.insert(sector).second) {
+      return false;
     }
     std::vector<uint8_t> table(size);
     in.seekg(static_cast<std::streamoff>(base + sector * kSector));
@@ -441,9 +542,9 @@ class DiscExtractor {
         continue;
       }
       const std::string name(reinterpret_cast<const char*>(&table[offset + 14]), name_length);
-      if (name.empty() || name == "." || name == ".." || name.find('/') != std::string::npos ||
-          name.find('\\') != std::string::npos) {
-        continue;  // Never write outside the destination.
+      if (name.empty() || name == "." || name == ".." ||
+          name.find_first_of("/\\:") != std::string::npos) {
+        continue;  // Never write outside the destination (a ':' would name a drive on Windows).
       }
       if (attributes & 0x10) {
         if (!Walk(in, base, start, length, prefix + name + "/", out, depth + 1)) {
@@ -463,6 +564,7 @@ class DiscExtractor {
   }
 
   void Extract(const fs::path& iso, const fs::path& destination) {
+    walked_.clear();
     std::ifstream in(iso, std::ios::binary);
     if (!in) {
       return Fail("Could not open the disc image.");
@@ -883,7 +985,7 @@ class OptionsDialog final : public rex::ui::DialogBase {
       }
       ImGui::Separator();
       ImGui::TextDisabled("Saved to %s. * applies after a restart.",
-                          OptionsFile().filename().string().c_str());
+                          Utf8(OptionsFile().filename()).c_str());
       if (ImGui::Button("All settings (F4)")) {
         ui_.ToggleOverlay("settings");
       }
@@ -992,7 +1094,7 @@ class LauncherDialog final : public rex::ui::DialogBase {
       ImGui::ProgressBar(extractor_->Progress(), ImVec2(-1, 0));
       ImGui::TextDisabled("%.0f of %.0f MB   %s", extractor_->BytesDone() / 1048576.0,
                           extractor_->BytesTotal() / 1048576.0, extractor_->Status().c_str());
-      ImGui::TextDisabled("Into %s", extract_to_.string().c_str());
+      ImGui::TextDisabled("Into %s", Utf8(extract_to_).c_str());
       const bool focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) ||
                            !ImGui::IsWindowFocused(ImGuiFocusedFlags_AnyWindow);
       if (ImGui::Button("Cancel (Esc)", ImVec2(130, 0)) ||
@@ -1015,7 +1117,7 @@ class LauncherDialog final : public rex::ui::DialogBase {
         ImGui::TextColored(kWarn, "The game is not set up yet. Choose your disc image below.");
         break;
     }
-    ImGui::TextDisabled("Game folder: %s", folder_.empty() ? "(none)" : folder_.string().c_str());
+    ImGui::TextDisabled("Game folder: %s", folder_.empty() ? "(none)" : Utf8(folder_).c_str());
     if (!message_.empty()) {
       ImGui::PushStyleColor(ImGuiCol_Text, message_is_error_ ? kWarn : kGood);
       ImGui::TextWrapped("%s", message_.c_str());
@@ -1151,7 +1253,7 @@ class LauncherDialog final : public rex::ui::DialogBase {
       char text[512];
       std::snprintf(text, sizeof(text),
                     "About 7 GB of free space is needed for the copied game in %s (%.1f GB free).",
-                    default_folder_.string().c_str(), space.available / 1073741824.0);
+                    Utf8(default_folder_).c_str(), space.available / 1073741824.0);
       message_ = text;
       REXLOG_WARN("ncaabb10: disc setup: {}", message_);
       message_is_error_ = true;
@@ -1159,7 +1261,7 @@ class LauncherDialog final : public rex::ui::DialogBase {
     }
     extract_to_ = default_folder_;
     message_.clear();
-    REXLOG_INFO("ncaabb10: disc setup from {} into {}", iso.string(), extract_to_.string());
+    REXLOG_INFO("ncaabb10: disc setup from {} into {}", Utf8(iso), Utf8(extract_to_));
     extract_start_ = std::chrono::steady_clock::now();
     extractor_ = std::make_unique<DiscExtractor>();
     extractor_->Start(iso, extract_to_);
@@ -1187,8 +1289,15 @@ class LauncherDialog final : public rex::ui::DialogBase {
     }
     const GameCheck check = CheckGameFolder(picked);
     if (check == GameCheck::kMissing) {
-      message_ = "No default.xex in " + chosen->front().string() +
+      message_ = "No default.xex in " + Utf8(chosen->front()) +
                  ". Choose the folder the disc was extracted into.";
+      message_is_error_ = true;
+      return;
+    }
+    if (!NativeText(picked)) {
+      message_ = "The game can't use " + Utf8(picked) +
+                 " on this PC: its name has characters outside the system's language settings. "
+                 "Move the game to a folder with a plain name and choose it again.";
       message_is_error_ = true;
       return;
     }
@@ -1238,11 +1347,7 @@ void Configure(rex::SettingsRegistry& settings) {
   // The player's options, at the config file layer: the environment and command line still win.
   std::error_code ec;
   if (fs::exists(OptionsFile(), ec)) {
-    LoadUserSettingNames();
-    if (auto loaded = settings.Load(OptionsFile(), rex::SettingLayer::kFile); !loaded) {
-      REXLOG_WARN("ncaabb10: loading {} failed: {}", OptionsFile().string(),
-                  loaded.error().GetDescription());
-    }
+    LoadUserSettings(settings);
   }
 }
 
@@ -1274,12 +1379,14 @@ bool RunLauncher(rex::app::TitleApp& app) {
   }
   const GameCheck check = CheckGameFolder(folder);
   const bool shift = ShiftHeld();
-  REXLOG_INFO("ncaabb10: launcher: game folder '{}' check {} show_launcher {} shift {}", folder.string(),
+  REXLOG_INFO("ncaabb10: launcher: game folder '{}' check {} show_launcher {} shift {}", Utf8(folder),
               static_cast<int>(check), Settings().show_launcher.Get(), shift);
   if (check == GameCheck::kOk && !Settings().show_launcher.Get() && !shift) {
     // This session only: Save would also persist command line values such as a test's flags.
     if (!SamePath(GetText("title.game_root"), folder) && g_registry) {
-      (void)g_registry->SetText("title.game_root", folder.string());
+      if (auto text = NativeText(folder)) {
+        (void)g_registry->SetText("title.game_root", *text);
+      }
     }
     return true;
   }
@@ -1303,7 +1410,9 @@ bool RunLauncher(rex::app::TitleApp& app) {
     return false;
   }
   if (!SamePath(GetText("title.game_root"), view->folder())) {
-    SetAndSave("title.game_root", view->folder().string());
+    if (auto text = NativeText(view->folder())) {
+      SetAndSave("title.game_root", *text);
+    }
   }
   return true;
 }

@@ -17,7 +17,7 @@
                 "CMAKE_CROSS_CONFIGS": "all",
                 "CMAKE_DEFAULT_BUILD_TYPE": "Debug",
                 "CMAKE_DEFAULT_CONFIGS": "all",
-                "CMAKE_PREFIX_PATH": "C:/Users/allen/Downloads/Project/rexglue-sdk-0.11.0-win-amd64/win-amd64",
+                "CMAKE_PREFIX_PATH": "${sourceDir}/../rexglue-sdk-0.11.0-win-amd64/win-amd64",
                 "CMAKE_CXX_COMPILER_TARGET": "x86_64-pc-windows-msvc",
                 "CMAKE_LINKER_TYPE": "MSVC"
             },
