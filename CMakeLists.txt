@@ -23,7 +23,7 @@ add_library(ncaabb10_common OBJECT ${NCAABB10_HOST_SOURCES})
 rexglue_setup_host_library(ncaabb10_common)
 
 if (WIN32)
-  add_executable(ncaabb10 WIN32 src/main.cpp)
+  add_executable(ncaabb10 WIN32 src/main.cpp src/ncaabb10.manifest)
 else ()
   add_executable(ncaabb10 src/main.cpp)
 endif ()

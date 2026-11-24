@@ -24,7 +24,11 @@ The launcher sets the game up for you: start `ncaabb10.exe`, choose **Set up fro
 `default.xex` and enables Play. **Use an extracted folder** accepts a folder you extracted yourself
 (the folder with `default.xex`, or the one above it). The copy goes into `game.partial` first and
 replaces `game/` only once `default.xex` verifies, so Cancel (or Esc) leaves an existing setup
-untouched. For development, extracting into `assets/` works too:
+untouched. A damaged or altered image (a looping or oversized file list, file names a real disc
+never has, a short read) stops the setup before anything is written, and if swapping in the new
+copy fails (a file held open by another program), the old `game/` is put back. Game folders with
+names in any language work: the Windows exe runs with UTF-8 as its code page (Windows 10 1903 or
+later). For development, extracting into `assets/` works too:
 
 ```
 python -I tools/xiso.py extract "NCAA Basketball 10 (USA).iso" assets
@@ -265,6 +269,9 @@ window), and screenshots the game window with PrintWindow:
 
 `NCAABB10_TEST_ISO=<path>` makes the launcher start the disc image setup on that file, as if
 chosen in the file dialog (which a script cannot drive); the log reports the outcome.
+`python -I tools/make_test_isos.py <dir> assets/default.xex` writes small images for it: a good
+one, the wrong version, not a disc, no `default.xex`, a looping and an oversized file list,
+escaping and invalid names, and short reads.
 
 A virtual SDL controller stands in for a real one: `pad:<BUTTON>[:<ms>]` presses a button
 (A B X Y BACK GUIDE START LS RS LB RB UP DOWN LEFT RIGHT), `padhold:<BUTTON>` and `padup:<BUTTON>`

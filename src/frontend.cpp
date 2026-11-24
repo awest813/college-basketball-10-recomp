@@ -7,6 +7,7 @@
 #include <array>
 #include <atomic>
 #include <cctype>
+#include <cerrno>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -20,6 +21,8 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <string_view>
+#include <system_error>
 #include <thread>
 #include <vector>
 
@@ -472,6 +475,13 @@ class DiscExtractor {
     old += ".old";
     std::error_code ec;
     try {
+      // A previous setup that could not put the old install back left it in .old: restore it
+      // before anything below deletes .old. The launcher has already made the destination
+      // folder (to measure free space), so an empty one counts as missing.
+      if (fs::exists(old, ec) && (!fs::exists(destination, ec) || fs::is_empty(destination, ec))) {
+        fs::remove(destination, ec);
+        RenameRetrying(old, destination, ec);
+      }
       fs::remove_all(work, ec);
       Extract(iso, work);
       if (!failed_) {
@@ -490,6 +500,10 @@ class DiscExtractor {
             if (had_install) {
               std::error_code restore_ec;
               RenameRetrying(old, destination, restore_ec);  // Put the old install back.
+              if (restore_ec) {
+                Fail("Could not move the copied game into " + Utf8(destination) + ": " +
+                     ec.message() + ". The previous game files are in " + Utf8(old) + ".");
+              }
             }
           } else {
             fs::remove_all(old, ec);
@@ -503,6 +517,21 @@ class DiscExtractor {
       fs::remove_all(work, ec);
     }
     done_ = true;
+  }
+
+  // The disc's file names are printable ASCII that every host file system takes. Anything else
+  // (a separator or a drive colon that would write outside the destination, "..", bytes that are
+  // not text) means a damaged or altered image; skipping the entry would install a broken game.
+  static bool PlainName(std::string_view name) {
+    if (name.empty() || name == "." || name == "..") {
+      return false;
+    }
+    for (const char c : name) {
+      if (c < 0x20 || c > 0x7E || std::string_view("<>:\"/\\|?*").find(c) != std::string_view::npos) {
+        return false;
+      }
+    }
+    return true;
   }
 
   // Walks one directory table, a binary tree of entries addressed in 4-byte units.
@@ -542,9 +571,8 @@ class DiscExtractor {
         continue;
       }
       const std::string name(reinterpret_cast<const char*>(&table[offset + 14]), name_length);
-      if (name.empty() || name == "." || name == ".." ||
-          name.find_first_of("/\\:") != std::string::npos) {
-        continue;  // Never write outside the destination (a ':' would name a drive on Windows).
+      if (!PlainName(name)) {
+        return false;
       }
       if (attributes & 0x10) {
         if (!Walk(in, base, start, length, prefix + name + "/", out, depth + 1)) {
@@ -613,9 +641,12 @@ class DiscExtractor {
       const fs::path out_path = destination / fs::path(std::u8string(e.path.begin(), e.path.end()));
       std::error_code ec;
       fs::create_directories(out_path.parent_path(), ec);
+      errno = 0;
       std::ofstream out(out_path, std::ios::binary | std::ios::trunc);
       if (!out) {
-        return Fail("Could not write " + e.path + ". Is there enough free space?");
+        const int error = errno;
+        return Fail("Could not create " + e.path +
+                    (error ? ": " + std::generic_category().message(error) + "." : "."));
       }
       in.clear();
       in.seekg(static_cast<std::streamoff>(base + e.sector * kSector));
@@ -923,10 +954,24 @@ class OptionsDialog final : public rex::ui::DialogBase {
         Combo("Texture filtering", "gpu.anisotropic_override", kAnisoLabels, kAnisoValues);
         Checkbox("Wait for display vsync", "gpu.vsync",
                  "Off is smoother: the game paces itself at 60 fps");
-        static const char* const path_labels[] = {"Fast (host render targets)",
-                                                  "Accurate (rasterizer ordered views)"};
-        static const char* const path_values[] = {"rtv", "rov"};
-        Combo("Render path *", "gpu.d3d12.render_target_path", path_labels, path_values);
+        // Each renderer has its own setting; "any" is D3D12 on Windows and Vulkan elsewhere.
+        const std::string driver = GetText("gpu.driver");
+#if defined(_WIN32)
+        const bool vulkan = driver == "vulkan";
+#else
+        const bool vulkan = driver == "vulkan" || driver == "any";
+#endif
+        if (vulkan) {
+          static const char* const path_labels[] = {"Fast (host render targets)",
+                                                    "Accurate (fragment shader interlock)"};
+          static const char* const path_values[] = {"", "fsi"};
+          Combo("Render path *", "gpu.vulkan.render_target_path", path_labels, path_values);
+        } else if (driver != "null") {
+          static const char* const path_labels[] = {"Fast (host render targets)",
+                                                    "Accurate (rasterizer ordered views)"};
+          static const char* const path_values[] = {"rtv", "rov"};
+          Combo("Render path *", "gpu.d3d12.render_target_path", path_labels, path_values);
+        }
       }
       if (ImGui::CollapsingHeader("Audio", ImGuiTreeNodeFlags_DefaultOpen)) {
         Slider("Volume", "apu.gain", 0.0f, 2.0f, "%.2f");

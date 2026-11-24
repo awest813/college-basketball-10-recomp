@@ -151,19 +151,21 @@ void UnplugTestPad(int slot) {
 // With hid.mnk_mode on (the default) the keys act as pad buttons through hid.keybind_*.
 // SDL ignores controllers while the window is in the background, so a script that drives the test
 // controller sets SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1.
-void StartInputFeed(rex::hid::IInputSystem& input) {
+// The returned thread stops and joins when destroyed, which must happen before the input system
+// and SDL shut down.
+std::jthread StartInputFeed(rex::hid::IInputSystem& input) {
   const char* file = std::getenv("NCAABB10_INPUT_FILE");
   if (!file || !*file) {
-    return;
+    return {};
   }
   std::string path = file;
   REXLOG_INFO("ncaabb10: following input file {}", path);
-  std::thread([&input, path] {
+  return std::jthread([&input, path](std::stop_token stop) {
     // Open, read the complete new lines and close on every poll: an open ifstream would keep
     // the writer from appending on Windows.
     std::streamoff consumed = 0;
     std::vector<std::string> lines;
-    while (true) {
+    while (!stop.stop_requested()) {
       std::this_thread::sleep_for(std::chrono::milliseconds(20));
       lines.clear();
       {
@@ -179,6 +181,9 @@ void StartInputFeed(rex::hid::IInputSystem& input) {
         }
       }
       for (const auto& line : lines) {
+        if (stop.stop_requested()) {
+          break;
+        }
         std::istringstream words(line);
         std::string verb;
         if (line.starts_with("text ")) {
@@ -261,7 +266,7 @@ void StartInputFeed(rex::hid::IInputSystem& input) {
                     pad ? pad->state.buttons : 0xFFFF);
       }
     }
-  }).detach();
+  });
 }
 
 }  // namespace
@@ -356,13 +361,13 @@ class Ncaabb10App : public rex::app::TitleApp {
 // Init, then the launcher until the player chooses Play, then the title.
 int GameMain(Ncaabb10App& app, const rex::CLIArgList& args) {
   if (app.Init(args)) {
-    StartInputFeed(app.GetInput());  // Test scripts drive the launcher too.
+    std::jthread feed = StartInputFeed(app.GetInput());  // Test scripts drive the launcher too.
     ncaabb10::frontend::InstallUI(app);
     if (ncaabb10::frontend::RunLauncher(app) && app.LaunchTitle()) {
       app.Run();
     }
     ncaabb10::frontend::UninstallUI();
-  }
+  }  // The input feed stops here, before Shutdown.
   return app.Shutdown();
 }
 
