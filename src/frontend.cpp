@@ -14,6 +14,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <map>
 #include <memory>
@@ -49,7 +50,9 @@
 #else
 #include <SDL3/SDL_events.h>
 #include <SDL3/SDL_keyboard.h>
+#include <SDL3/SDL_surface.h>
 #include <SDL3/SDL_timer.h>
+#include <SDL3/SDL_video.h>
 #endif
 
 namespace ncaabb10::frontend {
@@ -271,8 +274,10 @@ void Save() {
 // layer, and the command line above it, so both still win. A value this build refuses is reported
 // and dropped; the entries after it still apply. The other way round, a later change in F4 is
 // taken into this file (AdoptOtherChanges), so neither undoes the other.
-void LoadUserSettings(rex::SettingsRegistry& settings) {
-  std::ifstream in(OptionsFile());
+// Calls entry(name, value) for each setting in an options file, value as written (TOML text).
+template <typename Fn>
+void ReadOptions(const fs::path& file, Fn&& entry) {
+  std::ifstream in(file);
   std::string line, section;
   while (std::getline(in, line)) {
     line = Trim(line);
@@ -287,16 +292,21 @@ void LoadUserSettings(rex::SettingsRegistry& settings) {
     if (eq == std::string::npos || section.empty()) {
       continue;
     }
-    const std::string name = section + "." + Trim(line.substr(0, eq));
-    const std::string value = Trim(line.substr(eq + 1));
-    if (auto set = settings.SetText(rex::SettingLayer::kEnvironment, name, TomlValueText(value)); !set) {
-      REXLOG_WARN("ncaabb10: {} refused {} = {} ({}); dropping it", Utf8(OptionsFile()), name, value,
-                  set.error().GetDescription());
-      continue;
+    entry(section + "." + Trim(line.substr(0, eq)), Trim(line.substr(eq + 1)));
+  }
+}
+
+void LoadUserSettings(rex::SettingsRegistry& settings) {
+  ReadOptions(OptionsFile(), [&](const std::string& name, const std::string& value) {
+    if (auto set = settings.SetText(rex::SettingLayer::kEnvironment, name, TomlValueText(value));
+        !set) {
+      REXLOG_WARN("ncaabb10: {} refused {} = {} ({}); dropping it", Utf8(OptionsFile()), name,
+                  value, set.error().GetDescription());
+      return;
     }
     g_user_values[name] = value;
     Remember(settings, name);
-  }
+  });
 }
 
 void SetAndSave(std::string_view name, std::string_view text) {
@@ -1317,6 +1327,145 @@ std::unique_ptr<rex::ui::IDialog> CreateFullscreenToggle(rex::ui::IUISystem&) {
 // ---------------------------------------------------------------------------------------------
 // Launcher
 
+// title.game_root as the title will use it: GetText keeps {app.root}-style references unresolved.
+fs::path GameRootSetting() {
+  return rex::detail::ResolveSettingPath(fs::path(GetText("title.game_root")));
+}
+
+// Paths compare by their parts: the setting renders with forward slashes, the launcher's folder
+// with the platform's own.
+bool SamePath(const fs::path& a, const fs::path& b) {
+  return a.lexically_normal() == b.lexically_normal();
+}
+
+// Saves sit under user/<profile id>/<title id>/; any such folder means this copy has saves.
+constexpr char kTitleIdFolder[] = "454108C3";
+
+bool HasSaves(const fs::path& user_root) {
+  std::error_code ec;
+  for (const auto& profile : fs::directory_iterator(user_root, ec)) {
+    std::error_code entry_ec;
+    if (profile.is_directory(entry_ec) &&
+        fs::is_directory(profile.path() / kTitleIdFolder, entry_ec)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Takes the settings of another copy's options file into this one, as if chosen in Options: what
+// can change now applies, what is fixed for this run applies on the next start. The game folder
+// is left out; the launcher decides that.
+void ImportOptions(const fs::path& file) {
+  if (!g_registry) {
+    return;
+  }
+  ReadOptions(file, [](const std::string& name, const std::string& value) {
+    if (name == "title.game_root") {
+      return;
+    }
+    const std::string text = TomlValueText(value);
+    auto found = g_registry->Find(name);
+    if (found && *found && (*found)->IsFrozen()) {
+      if ((*found)->Check(text)) {
+        g_next_start[name] = text;
+        g_user_values[name] = value;
+      }
+      return;
+    }
+    if (auto set = g_registry->SetText(name, text); !set) {
+      REXLOG_WARN("ncaabb10: imported option {} = {} refused: {}", name, value,
+                  set.error().GetDescription());
+      return;
+    }
+    g_user_values[name] = value;
+    Remember(*g_registry, name);
+  });
+  Save();
+}
+
+struct Imported {
+  int saves = 0;
+  bool options = false;
+  fs::path game;  // The other copy's game folder, when it is set up and verifies.
+  std::string error;
+};
+
+// Brings an older copy's saves (its user/ folder, without the utility drive cache the game
+// rebuilds) and options into this copy, which has no saves yet. picked is that copy's folder or
+// its user/ folder. The older copy keeps everything; nothing here is overwritten.
+Imported ImportOlderCopy(const fs::path& picked, const fs::path& user_root) {
+  Imported result;
+  std::error_code ec;
+  fs::path root = picked;
+  if (!fs::is_directory(root / "user", ec) && root.filename() == "user") {
+    root = root.parent_path();
+  }
+  const fs::path old_user = root / "user";
+  if (!HasSaves(old_user)) {
+    result.error = "No saves in " + Utf8(picked) +
+                   ". Choose the folder of the older copy, the one with ncaabb10.exe and a user "
+                   "folder in it.";
+    return result;
+  }
+  fs::create_directories(user_root, ec);
+  if (fs::equivalent(old_user, user_root, ec)) {
+    result.error = "That folder is this copy. Choose the folder of the older one.";
+    return result;
+  }
+  // Each folder under <profile>/<title>/<content type>/ is one save; Headers holds their list
+  // entries, not saves.
+  for (const auto& profile : fs::directory_iterator(old_user, ec)) {
+    for (const auto& type : fs::directory_iterator(profile.path() / kTitleIdFolder, ec)) {
+      if (type.path().filename() == "Headers") {
+        continue;
+      }
+      for (const auto& save : fs::directory_iterator(type.path(), ec)) {
+        std::error_code save_ec;
+        result.saves += save.is_directory(save_ec) ? 1 : 0;
+      }
+    }
+  }
+  std::vector<fs::path> copied;
+  for (const auto& entry : fs::directory_iterator(old_user, ec)) {
+    if (entry.path().filename() == "cache") {
+      continue;
+    }
+    const fs::path to = user_root / entry.path().filename();
+    std::error_code exists_ec;
+    const bool was_there = fs::exists(to, exists_ec);
+    std::error_code copy_ec;
+    fs::copy(entry.path(), to, fs::copy_options::recursive | fs::copy_options::skip_existing,
+             copy_ec);
+    if (!was_there) {
+      copied.push_back(to);
+    }
+    if (copy_ec) {
+      // Take back what this copy did not have before, so a retry starts clean.
+      for (const fs::path& path : copied) {
+        std::error_code remove_ec;
+        fs::remove_all(path, remove_ec);
+      }
+      result.error = "Could not copy the saves from " + Utf8(old_user) + ": " + copy_ec.message();
+      result.saves = 0;
+      return result;
+    }
+  }
+  const fs::path old_options = root / "ncaabb10_options.toml";
+  std::error_code options_ec;
+  if (fs::is_regular_file(old_options, options_ec) &&
+      !fs::equivalent(old_options, OptionsFile(), options_ec)) {
+    ImportOptions(old_options);
+    result.options = true;
+  }
+  if (CheckGameFolder(root / "game") == GameCheck::kOk && NativeText(root / "game")) {
+    result.game = (root / "game").lexically_normal().make_preferred();
+  }
+  REXLOG_INFO("ncaabb10: brought over {} saves from {} (options {}, game {})", result.saves,
+              Utf8(old_user), result.options, Utf8(result.game));
+  return result;
+}
+
 // The launcher's backdrop: a dim outline of a college court (94 by 50 ft, the 2009 three-point
 // arc at 20 ft 9 in) fitted to the window, over a dark gradient. Drawn behind every window, so
 // Options opens over it too.
@@ -1383,15 +1532,21 @@ class LauncherDialog final : public rex::ui::DialogBase {
  public:
   enum class Result { kNone, kPlay, kQuit };
 
-  LauncherDialog(rex::ui::IUISystem& ui, fs::path folder, fs::path default_folder)
+  LauncherDialog(rex::ui::IUISystem& ui, fs::path folder, fs::path default_folder,
+                 fs::path user_root)
       : ui_(ui),
         folder_(folder.lexically_normal().make_preferred()),
-        default_folder_(default_folder.lexically_normal().make_preferred()) {
+        default_folder_(default_folder.lexically_normal().make_preferred()),
+        user_root_(std::move(user_root)) {
     Recheck();
     // Test hook, like NCAABB10_INPUT_FILE: run the disc image setup on this file as if it had
     // been chosen in the file dialog, which a test script cannot drive.
     if (const char* iso = std::getenv("NCAABB10_TEST_ISO"); iso && *iso) {
       StartSetup(fs::path(std::u8string(iso, iso + std::strlen(iso))));
+    }
+    // The same for "Bring over saves from an older copy".
+    if (const char* older = std::getenv("NCAABB10_TEST_IMPORT"); older && *older) {
+      ImportFrom(fs::path(std::u8string(older, older + std::strlen(older))));
     }
   }
 
@@ -1460,7 +1615,8 @@ class LauncherDialog final : public rex::ui::DialogBase {
                      ImGuiWindowFlags_NoSavedSettings);
     ImGui::PopStyleVar();
     BigText("NCAA BASKETBALL 10", 3, kTitleColor);
-    ImGui::TextDisabled("PC port, recompiled with ReXGlue  |  built %s", __DATE__);
+    ImGui::TextDisabled("PC port %s, recompiled with ReXGlue  |  built %s", NCAABB10_VERSION,
+                        __DATE__);
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
@@ -1593,6 +1749,17 @@ class LauncherDialog final : public rex::ui::DialogBase {
     ImGui::EndDisabled();
     ImGui::SetItemTooltip(folder_exists_ ? "Show the game folder in your file manager."
                                          : "The game folder does not exist yet.");
+    // A new copy (a newer version unpacked into a folder of its own) starts without saves.
+    if (!has_saves_) {
+      ImGui::Spacing();
+      ImGui::TextDisabled("SAVES");
+      if (ImGui::Button("Bring over saves from an older copy...", small)) {
+        PickOlderCopy();
+      }
+      ImGui::SetItemTooltip("Copy the saves and options of an earlier copy of this port\n"
+                            "(choose its folder, the one with ncaabb10.exe). That copy keeps\n"
+                            "them. If its game is set up, Play uses that one too.");
+    }
 
     ImGui::Spacing();
     ImGui::Separator();
@@ -1632,6 +1799,7 @@ class LauncherDialog final : public rex::ui::DialogBase {
     check_ = CheckGameFolder(folder_);
     std::error_code ec;
     folder_exists_ = !folder_.empty() && fs::is_directory(folder_, ec);
+    has_saves_ = HasSaves(user_root_);
   }
 
   // The game's state as a card: a bar in the state's color, a headline, what it means and the
@@ -1776,16 +1944,62 @@ class LauncherDialog final : public rex::ui::DialogBase {
     }
     folder_ = picked.lexically_normal().make_preferred();
     Recheck();
+    if (check_ == GameCheck::kOk) {
+      RememberFolder();
+    }
     message_ = check_ == GameCheck::kOk ? "The game is set up. Press Play." : "";
     message_is_error_ = false;
+  }
+
+  void PickOlderCopy() {
+    rex::ui::FileDialogConfig config;
+    config.mode = rex::ui::FileDialogConfig::Mode::kOpenFolder;
+    config.title = "Choose the folder of your older copy (with ncaabb10.exe in it)";
+    auto chosen = ui_.ShowFileDialog(config);
+    if (!chosen || chosen->empty()) {
+      return;
+    }
+    ImportFrom(chosen->front());
+  }
+
+  void ImportFrom(const fs::path& picked) {
+    const Imported imported = ImportOlderCopy(picked, user_root_);
+    if (!imported.error.empty()) {
+      message_ = imported.error;
+      message_is_error_ = true;
+      Recheck();
+      return;
+    }
+    message_ = std::format("Brought over {} save{}{}.", imported.saves,
+                           imported.saves == 1 ? "" : "s",
+                           imported.options ? " and your options" : "");
+    if (!imported.game.empty() && check_ != GameCheck::kOk) {
+      folder_ = imported.game;
+      RememberFolder();
+      message_ += " Play uses the game files in " + Utf8(folder_) +
+                  ", so keep that folder (or set the game up again here).";
+    }
+    message_is_error_ = false;
+    Recheck();
+  }
+
+  // Saves a chosen game folder at once, so quitting before Play keeps the choice.
+  void RememberFolder() {
+    if (!SamePath(GameRootSetting(), folder_)) {
+      if (auto text = NativeText(folder_)) {
+        SetAndSave("title.game_root", *text);
+      }
+    }
   }
 
   rex::ui::IUISystem& ui_;
   fs::path folder_;
   fs::path default_folder_;
+  fs::path user_root_;
   fs::path extract_to_;
   GameCheck check_ = GameCheck::kMissing;
   bool folder_exists_ = false;
+  bool has_saves_ = true;
   std::string message_;
   bool message_is_error_ = false;
   bool was_ok_ = false;
@@ -1795,17 +2009,6 @@ class LauncherDialog final : public rex::ui::DialogBase {
   std::chrono::steady_clock::time_point extract_start_;
   Result result_ = Result::kNone;
 };
-
-// Paths compare by their parts: the setting renders with forward slashes, the launcher's folder
-// with the platform's own.
-// title.game_root as the title will use it: GetText keeps {app.root}-style references unresolved.
-fs::path GameRootSetting() {
-  return rex::detail::ResolveSettingPath(fs::path(GetText("title.game_root")));
-}
-
-bool SamePath(const fs::path& a, const fs::path& b) {
-  return a.lexically_normal() == b.lexically_normal();
-}
 
 bool ShiftHeld() {
 #if defined(_WIN32)
@@ -1851,7 +2054,35 @@ void Configure(rex::SettingsRegistry& settings) {
   }
 }
 
+#if !defined(_WIN32)
+// The window icon. On Windows SDL takes it from the executable's icon resource.
+void SetWindowIcon() {
+#include "window_icon.inc"
+  int count = 0;
+  SDL_Window** windows = SDL_GetWindows(&count);
+  if (!windows) {
+    return;
+  }
+  SDL_Surface* icon = SDL_CreateSurfaceFrom(kWindowIconSize, kWindowIconSize,
+                                            SDL_PIXELFORMAT_RGBA32,  // R, G, B, A bytes.
+                                            const_cast<unsigned char*>(kWindowIcon),
+                                            kWindowIconSize * 4);
+  if (icon) {
+    for (int i = 0; i < count; ++i) {
+      if (!SDL_SetWindowIcon(windows[i], icon)) {
+        REXLOG_WARN("ncaabb10: window icon: {}", SDL_GetError());
+      }
+    }
+    SDL_DestroySurface(icon);
+  }
+  SDL_free(windows);
+}
+#endif
+
 void InstallUI(rex::app::TitleApp& app) {
+#if !defined(_WIN32)
+  SetWindowIcon();
+#endif
   rex::ui::IUISystem& ui = app.GetUI();
   static constexpr rex::ui::OverlayConfig kOverlays[] = {
       {"options", {rex::VirtualKey::kF1, rex::KeyModifiers::kNone},
@@ -1908,7 +2139,7 @@ bool RunLauncher(rex::app::TitleApp& app) {
     return false;
   }
 
-  auto launcher = std::make_unique<LauncherDialog>(app.GetUI(), folder, default_folder);
+  auto launcher = std::make_unique<LauncherDialog>(app.GetUI(), folder, default_folder, user_root);
   LauncherDialog* view = launcher.get();
   rex::ScopeGuard shown = app.GetUI().AddDialog(*view);
   while (view->result() == LauncherDialog::Result::kNone && app.RunFrame()) {

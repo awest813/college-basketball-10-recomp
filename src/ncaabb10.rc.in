@@ -1,0 +1,30 @@
+// Configured by CMakeLists.txt. The first icon is the one Explorer and SDL use.
+1 ICON "@CMAKE_CURRENT_SOURCE_DIR@/src/ncaabb10.ico"
+
+1 VERSIONINFO
+FILEVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+PRODUCTVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+FILEFLAGSMASK 0x3F
+FILEFLAGS 0x0
+FILEOS 0x40004
+FILETYPE 0x1
+FILESUBTYPE 0x0
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "FileDescription", "NCAA Basketball 10 PC port"
+            VALUE "FileVersion", "@PROJECT_VERSION@"
+            VALUE "InternalName", "ncaabb10"
+            VALUE "OriginalFilename", "ncaabb10.exe"
+            VALUE "ProductName", "NCAA Basketball 10 PC port (unofficial)"
+            VALUE "ProductVersion", "@PROJECT_VERSION@"
+            VALUE "Comments", "Recompiled with ReXGlue. Not affiliated with or endorsed by Electronic Arts or the NCAA. Needs your own game disc."
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

@@ -1,6 +1,6 @@
 # Gap list
 
-Audit of 2026-11-25, at commit 0aedae7. The items run most important first within each group.
+Audit of 2026-11-25, at commit 0aedae7; group 1 updated the same day. The items run most important first within each group.
 "Checked" means it was run and looked at, not only read in code.
 
 What already holds:
@@ -13,30 +13,49 @@ What already holds:
 
 ## 1. Before sharing a build with anyone
 
-1. **The zip has no license or third-party notices, and the repo has no LICENSE.**
-   - The ReXGlue SDK license (BSD style, with Xenia portions) requires binary redistributions to
-     reproduce its copyright notice.
-   - SDL3 (zlib), Dear ImGui (MIT), spdlog, toml++ and the others have notices of their own.
-   - The SDK links FFmpeg's libavcodec and libavutil statically (LGPL 2.1+). Shipping that inside
-     an SDK DLL brings LGPL obligations that need checking.
-   - `tools/package.ps1` copies only the README.
+Worked on 2026-11-25. Each item says what is done and what is still open.
+
+1. **Licenses and notices.**
+   - **Done:** the zip carries `THIRD_PARTY_NOTICES.txt`, built by `tools/notices.py` from the
+     SDK source the build used. It covers:
+     - the SDK and its Xenia portions
+     - SDL3, ImGui, spdlog, toml++, xxHash, SIMDe, stb, excrypt, TLSF, the AMD DXBC checksum and
+       the RenderDoc header
+     - glslang, VMA and Vulkan-Headers
+     - FFmpeg and libmspack, the two LGPL libraries
+   - The file also says which DLL holds each library, which FFmpeg decoders are built, and how to
+     rebuild the two DLLs that hold the LGPL code.
+   - **Open:** the repo has no LICENSE of its own. Choosing one is the owner's call.
+   - **Open, the owner's call:** `ncaabb10.exe` contains code translated from the game's
+     `default.xex`. The repo holds none, but the zip does. Other static recompilation projects ship
+     this way too; it's a legal question to weigh before sharing builds publicly.
 2. **Only one GPU has been tested.**
-   - Every Windows result is from an Intel Arc A750 on D3D12.
-   - NVIDIA and AMD were never run.
-   - The `rtv` render path default was chosen from Intel numbers.
+   - **Lower risk than first listed:** on NVIDIA and AMD the SDK already picks the `rtv` render
+     path itself (`render_target_cache.cpp`: ROV only on Intel), so the port's default only
+     changes Intel. The other defaults don't depend on the vendor.
+   - **Open:** never run on NVIDIA or AMD. [HARDWARE_TEST.md](HARDWARE_TEST.md) has the steps.
 3. **No physical controller has been tested.**
-   - All pad testing used SDL's virtual controller: menus, Options, a second player, unplugging
-     and vibration.
-   - An Xbox, PlayStation or Switch pad, the Guide button and Game Bar interplay were not checked
-     by hand.
-4. **Updating loses the player's saves and game copy.**
-   - `user/` (saves, options) and `game/` (6.2 GB) live beside the exe.
-   - Extracting a newer zip into a fresh folder starts with no saves and asks for disc setup again.
-   - There's no documented update path, and no saves location outside the build folder.
-5. **The exe has no icon, no version information and no signature.**
-   - Windows SmartScreen will warn about an unknown publisher.
-   - Explorer and the taskbar show a generic icon.
-   - There's no in-app version beyond the build date line on the launcher.
+   - **Open:** only SDL's virtual controller was used. HARDWARE_TEST.md has a five-step pad check
+     (launcher, replug, in game, Guide and Game Bar, two pads).
+4. **Updating used to lose the player's saves.**
+   - **Done:**
+     - The README documents updating. The zip holds no `user/`, `game/` or options file, so
+       unpacking over the old folder keeps everything.
+     - A copy without saves now offers **Bring over saves from an older copy**. It copies the old
+       copy's saves and options, and plays from its `game/` when that is set up.
+     - A chosen game folder is now saved at once, not only on Play.
+   - **Checked:** in a fresh copy, two saves and the options came over. After a restart, Play
+     loaded the imported profile (the game's autosave notice). An empty folder gives a clear
+     error.
+5. **The exe had no icon, version information or signature.**
+   - **Done:**
+     - An original basketball icon, drawn by `tools/make_icon.py`, sits in the exe resource.
+       Explorer and the window use it.
+     - Linux sets the same icon on the window through SDL (checked: a 64x64 `_NET_WM_ICON`).
+     - Version 0.1.0 is in the exe's Details and on the launcher.
+     - The README explains SmartScreen's "Run anyway".
+   - **Open:** code signing needs a certificate, which costs money and needs an identity. It's
+     the owner's call.
 
 ## 2. Platforms not yet covered
 

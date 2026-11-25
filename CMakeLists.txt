@@ -3,7 +3,11 @@
 # The SDK package provides rexglue_project and the rexglue_setup_* functions.
 
 cmake_minimum_required(VERSION 3.25)
-project(ncaabb10 LANGUAGES CXX)
+# The port's own version: the launcher shows it and the Windows exe carries it.
+project(ncaabb10 VERSION 0.1.0 LANGUAGES CXX)
+if (WIN32)
+  enable_language(RC)
+endif ()
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -21,9 +25,13 @@ set(NCAABB10_HOST_SOURCES src/ncaabb10_hooks.cpp src/kernel_fixes.cpp src/diagno
 # OBJECT and never STATIC, an archive drops the REX_EXPORT symbols.
 add_library(ncaabb10_common OBJECT ${NCAABB10_HOST_SOURCES})
 rexglue_setup_host_library(ncaabb10_common)
+target_compile_definitions(ncaabb10_common PRIVATE NCAABB10_VERSION="${PROJECT_VERSION}")
 
 if (WIN32)
-  add_executable(ncaabb10 WIN32 src/main.cpp src/ncaabb10.manifest)
+  # Icon and version information (Explorer, the taskbar; SDL takes the window icon from it).
+  configure_file(src/ncaabb10.rc.in "${CMAKE_CURRENT_BINARY_DIR}/ncaabb10.rc" @ONLY)
+  add_executable(ncaabb10 WIN32 src/main.cpp src/ncaabb10.manifest
+                                "${CMAKE_CURRENT_BINARY_DIR}/ncaabb10.rc")
 else ()
   add_executable(ncaabb10 src/main.cpp)
 endif ()

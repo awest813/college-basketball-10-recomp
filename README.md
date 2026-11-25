@@ -100,6 +100,21 @@ loading and deleting the profile, a roster set and a Dynasty; the profile autosa
 Dynasty back to the same week. Online menus (Xbox Live, Dynamic Update Hub, ESPN on demand) say
 you must be signed in to Xbox Live, as the console does offline.
 
+### Updating to a newer version
+
+The zip holds no `user/`, `game/` or options file, so unpacking a newer one over the old folder
+(replace the files it asks about) keeps the saves, the options and the game. Unpacked into a
+folder of its own instead, the new copy starts without saves: its launcher then offers **Bring
+over saves from an older copy**, which copies the old copy's saves and options (the old copy keeps
+them) and, when the game is set up there, plays from that copy's `game/` folder. Choosing a game
+folder (this way or with **Use an extracted folder**) is saved at once, not only on Play.
+
+### First start on Windows
+
+The exe is not code signed, so Windows SmartScreen may say it protected your PC from an
+unrecognized app; **More info**, then **Run anyway**, starts it. The exe carries the port's version
+(Properties > Details, and the line under the title in the launcher).
+
 ## Building on Windows
 
 Needs Visual Studio 2022 or later, any edition, or its Build Tools (MSVC + Windows SDK), CMake
@@ -129,7 +144,12 @@ full compile takes about 5 minutes on 14 jobs.
 The build copies the Visual C++ runtime DLLs the exe and the SDK import (`vcruntime140*.dll`,
 `msvcp140*.dll`) next to the exe, so the build folder runs on a PC without the VC++
 redistributable. `tools/package.ps1` packs a Release build into `out/ncaabb10-windows-x64.zip`
-(exe, DLLs, README; about 30 MB) without logs, saves, options or linker leftovers. Windows runs
+(exe, DLLs, README, `THIRD_PARTY_NOTICES.txt`; about 30 MB) without logs, saves, options or linker
+leftovers. The notices file is built by `tools/notices.py` from the SDK source the build used
+(`..\rexglue-sdk-src`, or `-Sdk <folder>`): the license of every library inside the shipped
+binaries, and where the source of the two LGPL ones (FFmpeg in `rexkernel.dll`, libmspack in
+`rexfilesystem.dll`) comes from. The port's version is in `CMakeLists.txt` (`project(... VERSION)`);
+`tools/make_icon.py` draws the icon (`src/ncaabb10.ico`, `src/window_icon.inc`). Windows runs
 no PowerShell scripts by default, so start this one and the `tools/*.ps1` test scripts as
 `powershell -ExecutionPolicy Bypass -File tools\package.ps1`. It holds no game files: on
 first start the launcher says the game is not set up and offers to set it up from a disc image or
@@ -308,6 +328,9 @@ window), and screenshots the game window with PrintWindow:
 
 `NCAABB10_TEST_ISO=<path>` makes the launcher start the disc image setup on that file, as if
 chosen in the file dialog (which a script cannot drive); the log reports the outcome.
+`NCAABB10_TEST_IMPORT=<folder>` does the same for **Bring over saves from an older copy**.
+[HARDWARE_TEST.md](HARDWARE_TEST.md) lists the checks that need hardware the port has not run on
+(physical controllers, other GPUs, 4K and display scaling, Linux on a real PC).
 `python -I tools/make_test_isos.py <dir> assets/default.xex` writes small images for it: a good
 one, the wrong version, not a disc, no `default.xex`, a looping and an oversized file list,
 escaping and invalid names, a Windows device name, names that differ only in case, and short reads.
