@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <format>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -26,6 +27,9 @@
 #include <tlhelp32.h>
 #else
 #include <dlfcn.h>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 #include <sys/syscall.h>
 #include <unistd.h>
 #include <sys/resource.h>
@@ -157,7 +161,54 @@ std::string TopThreads(double window_s) {
   return out;
 }
 #else
-std::string TopThreads(double) { return {}; }
+// The same from /proc/self/task: each thread's user and system time (stat fields 14 and 15, in
+// clock ticks) and its name (comm, at most 15 characters).
+std::string TopThreads(double window_s) {
+  namespace fs = std::filesystem;
+  static auto& previous = *new std::unordered_map<std::string, double>;  // Never destroyed.
+  static const double tick = 1.0 / static_cast<double>(sysconf(_SC_CLK_TCK));
+  std::unordered_map<std::string, double> current;
+  std::vector<std::pair<double, std::string>> busy;
+  std::error_code ec;
+  for (fs::directory_iterator it("/proc/self/task", ec), end; !ec && it != end; it.increment(ec)) {
+    const std::string tid = it->path().filename().string();
+    std::ifstream stat_file(it->path() / "stat");
+    std::string stat;
+    std::getline(stat_file, stat);
+    // The name in parentheses may hold spaces; the fields after its closing parenthesis do not.
+    const size_t close = stat.rfind(')');
+    if (close == std::string::npos) {
+      continue;
+    }
+    std::istringstream fields(stat.substr(close + 1));
+    std::string field;
+    unsigned long long utime = 0, stime = 0;
+    for (int i = 3; i <= 15 && fields >> field; ++i) {  // Field 3 is the state.
+      if (i == 14) {
+        utime = std::strtoull(field.c_str(), nullptr, 10);
+      } else if (i == 15) {
+        stime = std::strtoull(field.c_str(), nullptr, 10);
+      }
+    }
+    const double cpu = static_cast<double>(utime + stime) * tick;
+    current[tid] = cpu;
+    auto prev = previous.find(tid);
+    const double used = (cpu - (prev != previous.end() ? prev->second : cpu)) / window_s;
+    if (used > 0.05) {
+      std::ifstream comm_file(it->path() / "comm");
+      std::string name;
+      std::getline(comm_file, name);
+      busy.emplace_back(used, name.empty() ? tid : name);
+    }
+  }
+  previous = std::move(current);
+  std::sort(busy.begin(), busy.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+  std::string out;
+  for (size_t i = 0; i < busy.size() && i < 6; ++i) {
+    out += std::format("{}{} {:.2f}", i ? ", " : "", busy[i].second, busy[i].first);
+  }
+  return out;
+}
 #endif
 
 // The present hook only appends a timestamp; a monitor thread does the statistics, the thread

@@ -49,6 +49,7 @@
 #else
 #include <SDL3/SDL_events.h>
 #include <SDL3/SDL_keyboard.h>
+#include <SDL3/SDL_timer.h>
 #endif
 
 namespace ncaabb10::frontend {
@@ -1672,10 +1673,19 @@ bool ShiftHeld() {
 #if defined(_WIN32)
   return (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
 #else
-  // SDL learns the modifier state from the window's first events; nothing has pumped them yet.
-  // Pumping only queues them, so the UI still sees every one.
+  // SDL learns the modifier state when the window gets keyboard focus (X11 FocusIn, the Wayland
+  // keyboard enter event), which can come a few frames after the window opens; nothing has pumped
+  // those events yet. Pumping only queues them, so the UI still sees every one. Wait up to a
+  // quarter second for the focus: a compositor that never gives it reads as Shift not held.
   SDL_PumpEvents();
-  return (SDL_GetModState() & SDL_KMOD_SHIFT) != 0;
+  for (int i = 0; i < 25 && !SDL_GetKeyboardFocus(); ++i) {
+    SDL_Delay(10);
+    SDL_PumpEvents();
+  }
+  const bool focused = SDL_GetKeyboardFocus() != nullptr;
+  const bool shift = (SDL_GetModState() & SDL_KMOD_SHIFT) != 0;
+  REXLOG_INFO("ncaabb10: shift check: keyboard focus {}, shift {}", focused, shift);
+  return shift;
 #endif
 }
 

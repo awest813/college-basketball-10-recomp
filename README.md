@@ -228,8 +228,7 @@ override them) matter as well:
 - `ui.aspect_ratio=16:9`: the game renders 16:9, and keeps that shape on 16:10 and ultrawide
   displays.
 
-Measuring: `NCAABB10_PERF=1` logs fps, frame times, CPU and (on Windows) the busiest threads every
-5 s; `NCAABB10_PROFILE=1` (Windows only) adds a sampling profile of guest functions every 10 s (it
+Measuring: `NCAABB10_PERF=1` logs fps, frame times, CPU and the busiest threads every 5 s; `NCAABB10_PROFILE=1` (Windows only) adds a sampling profile of guest functions every 10 s (it
 costs fps while on), and `NCAABB10_PROFILE=callers` also names the game or SDK function behind
 time spent in the C runtime, the OS or the GPU driver; `tools/perf_run.ps1 -Out <folder>` runs a
 game and prints in-game fps and GPU use. `NCAABB10_AUDIO_DUMP=<file.wav>` records the game's
