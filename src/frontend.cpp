@@ -1370,6 +1370,8 @@ bool PrimaryButton(const char* label, ImVec2 size) {
   return pressed;
 }
 
+constexpr ImVec4 kTitleColor(0.55f, 0.95f, 0.45f, 1);
+
 // Text at a whole multiple of the pixel font's size, which keeps it crisp.
 void BigText(const char* text, float times, const ImVec4& color) {
   ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * times);
@@ -1444,16 +1446,20 @@ class LauncherDialog final : public rex::ui::DialogBase {
     const float scale = ApplyUiScale(io);
     DrawCourt(*ImGui::GetBackgroundDrawList(), io.DisplaySize, scale);
     const ImVec4 kGood(0.45f, 0.9f, 0.45f, 1), kWarn(1, 0.65f, 0.3f, 1);
-    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
-                            ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(ImVec2(660 * scale, 0), ImGuiCond_Always);
+    // The top stays put, centered for the usual height: a message appearing or the game becoming
+    // playable grows the window downward instead of moving the buttons under the mouse.
+    ImGui::SetNextWindowPos(
+        ImVec2(io.DisplaySize.x * 0.5f, std::max(8.0f, io.DisplaySize.y * 0.5f - 170 * scale)),
+        ImGuiCond_Always, ImVec2(0.5f, 0));
+    ImGui::SetNextWindowSize(ImVec2(std::min(660 * scale, io.DisplaySize.x - 16), 0),
+                             ImGuiCond_Always);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(18 * scale, 14 * scale));
     ImGui::Begin("NCAA Basketball 10##launcher", nullptr,
                  ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse |
                      ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                      ImGuiWindowFlags_NoSavedSettings);
     ImGui::PopStyleVar();
-    BigText("NCAA BASKETBALL 10", 3, ImVec4(0.55f, 0.95f, 0.45f, 1));
+    BigText("NCAA BASKETBALL 10", 3, kTitleColor);
     ImGui::TextDisabled("PC port, recompiled with ReXGlue  |  built %s", __DATE__);
     ImGui::Spacing();
     ImGui::Separator();
@@ -1525,11 +1531,17 @@ class LauncherDialog final : public rex::ui::DialogBase {
     const float button_height = 48 * scale;
     const float side_width = 130 * scale;
     const float gap = ImGui::GetStyle().ItemSpacing.x;
-    const float primary_width = ImGui::GetContentRegionAvail().x - 2 * (side_width + gap);
+    // At least the width of its label, should the window be narrower than the launcher.
+    const float primary_width =
+        std::max(ImGui::GetContentRegionAvail().x - 2 * (side_width + gap), 160 * scale);
     ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 2);
     const bool primary = PrimaryButton(ok ? "Play" : "Set up from disc image...",
                                        ImVec2(primary_width, button_height));
     ImGui::PopFont();
+    if (!ok) {
+      ImGui::SetItemTooltip("Choose your disc image (.iso). The game (6.2 GB) is copied\ninto %s",
+                            Utf8(default_folder_).c_str());
+    }
     if (ok) {
       if (primary || play_key) {
         REXLOG_INFO("ncaabb10: launcher Play ({}; enter {} keypad {} pad A {} alt {})",
@@ -1558,15 +1570,20 @@ class LauncherDialog final : public rex::ui::DialogBase {
     ImGui::Spacing();
     ImGui::TextDisabled("GAME FILES, FROM YOUR OWN DISC");
     const ImVec2 small(0, 24 * scale);
-    if (ok && ImGui::Button("Set up again from a disc image...", small)) {
-      PickIso();
-    }
     if (ok) {
+      if (ImGui::Button("Set up again from a disc image...", small)) {
+        PickIso();
+      }
+      ImGui::SetItemTooltip("Copy the game from your disc image again. The current copy\n"
+                            "stays until the new one checks out.\nInto %s",
+                            Utf8(default_folder_).c_str());
       ImGui::SameLine();
     }
     if (ImGui::Button("Use an extracted folder...", small)) {
       PickFolder();
     }
+    ImGui::SetItemTooltip("Play from a folder you extracted the disc into yourself\n"
+                          "(the one with default.xex in it).");
     ImGui::SameLine();
     ImGui::BeginDisabled(folder_.empty());
     if (ImGui::Button("Open game folder", small)) {
@@ -1643,7 +1660,7 @@ class LauncherDialog final : public rex::ui::DialogBase {
   }
 
   void DrawSetupProgress(bool keys, float scale) {
-    BigText("Setting up the game", 2, ImVec4(0.55f, 0.95f, 0.45f, 1));
+    BigText("Setting up the game", 2, kTitleColor);
     ImGui::TextUnformatted("Copying the game files from your disc image...");
     ImGui::ProgressBar(extractor_->Progress(), ImVec2(-1, 0));
     const double done = static_cast<double>(extractor_->BytesDone());

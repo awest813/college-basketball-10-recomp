@@ -11,6 +11,8 @@ public struct RECT { public int L, T, R, B; }
 public static class W {
   [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr h, out RECT r);
   [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h, IntPtr dc, uint f);
+  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+  [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint f);
 }
 "@
 if (-not (Test-Path -LiteralPath $Exe -PathType Leaf)) { "no game at $Exe (build it first, or pass -Exe)"; return }
@@ -59,6 +61,17 @@ function WinSize($name) {
   $h = Hwnd; $r = New-Object RECT; [W]::GetClientRect($h, [ref]$r) | Out-Null
   "size $name $($r.R)x$($r.B)"
 }
+# resize:<width>x<height> sets the window's client area to that size, even past the screen's (to
+# check the UI's larger steps on a small monitor). Windowed only.
+function Resize($v) {
+  $w, $hgt = $v.Split('x'); $h = Hwnd
+  $c = New-Object RECT; $o = New-Object RECT
+  [W]::GetClientRect($h, [ref]$c) | Out-Null; [W]::GetWindowRect($h, [ref]$o) | Out-Null
+  $fw = ($o.R - $o.L) - $c.R; $fh = ($o.B - $o.T) - $c.B
+  # SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE
+  [W]::SetWindowPos($h, [IntPtr]::Zero, 0, 0, [int]$w + $fw, [int]$hgt + $fh, 0x16) | Out-Null
+  WinSize "resized"
+}
 # ui:<KEY>[+ALT] presses a key through the game window's event queue (UI binds, ImGui).
 function UiKey($v) {
   $name, $mod = $v.Split('+')
@@ -81,6 +94,6 @@ function Axis($v) { $name, $value = $v.Split(':'); $n, $slot = Slot $name; Appen
 foreach ($s in $Steps) {
   if ($p.HasExited) { "game exited with code $($p.ExitCode)"; break }
   $k, $v = $s.Split(':', 2)
-  switch ($k) { 'wait' { Start-Sleep -Milliseconds ([int]([double]$v * 1000)) } 'shot' { Shot $v } 'key' { Key $v } 'watch' { Watch $v } 'burst' { Burst $v } 'winsize' { WinSize $v } 'ui' { UiKey $v } 'pad' { Pad $v } 'padhold' { PadSet $v 1 } 'padup' { PadSet $v 0 } 'axis' { Axis $v } 'unplug' { Append "unplug $v"; "unplug $v" } 'text' { Append "text $v"; "text $v" } }
+  switch ($k) { 'wait' { Start-Sleep -Milliseconds ([int]([double]$v * 1000)) } 'shot' { Shot $v } 'key' { Key $v } 'watch' { Watch $v } 'burst' { Burst $v } 'winsize' { WinSize $v } 'resize' { Resize $v } 'ui' { UiKey $v } 'pad' { Pad $v } 'padhold' { PadSet $v 1 } 'padup' { PadSet $v 0 } 'axis' { Axis $v } 'unplug' { Append "unplug $v"; "unplug $v" } 'text' { Append "text $v"; "text $v" } }
 }
 if (-not $Keep -and -not $p.HasExited) { Stop-Process -Id $p.Id -Force; "stopped" }

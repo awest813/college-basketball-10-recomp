@@ -323,7 +323,9 @@ records the vibration the game sends to each (`test controller 0 rumble low .. h
 `text:<text>` types into the focused text field (Options' player name).
 
 Steps also include `ui:<KEY>[+ALT]`, which pushes the key through the window's own event queue so
-it reaches the launcher and the F1/F11/Alt+Enter binds, and `winsize:<name>`. For example, the
+it reaches the launcher and the F1/F11/Alt+Enter binds, `winsize:<name>`, and
+`resize:<width>x<height>`, which sets the window's client size (Windows keeps it within the
+screen, so a 1080p monitor cannot show the UI's 2x step this way). For example, the
 launcher check is
 `-Steps "wait:8","ui:F1","wait:2","ui:ESCAPE","wait:2","ui:RETURN","wait:30","shot:title"`.
 
