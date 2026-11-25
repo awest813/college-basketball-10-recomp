@@ -19,8 +19,9 @@ Only this executable is supported (the analysis config is tied to it):
 | Version | `0.0.0.1` |
 | `default.xex` SHA-256 | `3201c28392f73af9c969a740181996e954d3c894a7117eb81f8ff50362de79ef` |
 
-The launcher sets the game up for you: start `ncaabb10.exe`, choose **Set up from a disc image
-(.iso)** and it copies the game into `game/` next to the build's `user/` folder (6.2 GB, about a
+The launcher sets the game up for you: start `ncaabb10.exe`, choose **Set up from disc image**
+(the large button until the game is set up; **Set up again from a disc image** below it after) and
+pick your `.iso`; it copies the game into `game/` next to the build's `user/` folder (6.2 GB, about a
 minute on an SSD; the launcher shows the speed and time left), checks `default.xex` and enables
 Play. Setup checks for that much free space before it copies anything (the old `game/` stays until
 the new copy verifies, so a reinstall needs the space again). **Use an extracted folder** accepts a folder you extracted yourself

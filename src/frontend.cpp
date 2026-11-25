@@ -1317,6 +1317,66 @@ std::unique_ptr<rex::ui::IDialog> CreateFullscreenToggle(rex::ui::IUISystem&) {
 // ---------------------------------------------------------------------------------------------
 // Launcher
 
+// The launcher's backdrop: a dim outline of a college court (94 by 50 ft, the 2009 three-point
+// arc at 20 ft 9 in) fitted to the window, over a dark gradient. Drawn behind every window, so
+// Options opens over it too.
+void DrawCourt(ImDrawList& draw, ImVec2 display, float scale) {
+  draw.AddRectFilledMultiColor(ImVec2(0, 0), display, IM_COL32(4, 26, 6, 255),
+                               IM_COL32(4, 26, 6, 255), IM_COL32(0, 4, 0, 255),
+                               IM_COL32(0, 4, 0, 255));
+  constexpr float kLength = 94, kWidth = 50, kPi = 3.14159265f;
+  const float margin = 0.06f * std::min(display.x, display.y);
+  const float feet = std::min((display.x - 2 * margin) / kLength, (display.y - 2 * margin) / kWidth);
+  if (feet <= 0) {
+    return;
+  }
+  const ImVec2 origin((display.x - kLength * feet) * 0.5f, (display.y - kWidth * feet) * 0.5f);
+  const auto at = [&](float x, float y) { return ImVec2(origin.x + x * feet, origin.y + y * feet); };
+  const ImU32 fill = IM_COL32(10, 40, 12, 90);
+  const ImU32 line = IM_COL32(70, 170, 60, 60);
+  const float thick = std::max(1.0f, 1.5f * scale);
+  draw.AddRectFilled(at(0, 0), at(kLength, kWidth), fill);
+  draw.AddRect(at(0, 0), at(kLength, kWidth), line, 0, 0, thick);
+  draw.AddLine(at(47, 0), at(47, kWidth), line, thick);
+  draw.AddCircle(at(47, 25), 6 * feet, line, 0, thick);
+  draw.AddCircle(at(47, 25), 2 * feet, line, 0, thick);
+  for (int end = 0; end < 2; ++end) {
+    // x measured from this end's baseline.
+    const auto x = [&](float from_baseline) { return end ? kLength - from_baseline : from_baseline; };
+    const float facing = end ? kPi : 0;  // The arcs open toward mid-court.
+    draw.AddRect(at(std::min(x(0), x(19)), 19), at(std::max(x(0), x(19)), 31), line, 0, 0, thick);
+    draw.AddCircle(at(x(19), 25), 6 * feet, line, 0, thick);
+    draw.PathArcTo(at(x(5.25f), 25), 20.75f * feet, facing - kPi / 2, facing + kPi / 2, 48);
+    draw.PathStroke(line, 0, thick);
+    draw.AddLine(at(x(0), 4.25f), at(x(5.25f), 4.25f), line, thick);
+    draw.AddLine(at(x(0), 45.75f), at(x(5.25f), 45.75f), line, thick);
+    draw.AddLine(at(x(4), 22), at(x(4), 28), line, thick);
+    draw.AddCircle(at(x(5.25f), 25), 0.75f * feet, line, 0, thick);
+  }
+}
+
+// A larger button in brighter colors, for the one thing the launcher expects next.
+bool PrimaryButton(const char* label, ImVec2 size) {
+  const ImVec4 hovered = ImGui::GetStyleColorVec4(ImGuiCol_ButtonHovered);
+  const auto lighter = [](ImVec4 c, float by) {
+    return ImVec4(std::min(1.0f, c.x + by), std::min(1.0f, c.y + by), std::min(1.0f, c.z + by), 1);
+  };
+  ImGui::PushStyleColor(ImGuiCol_Button, hovered);
+  ImGui::PushStyleColor(ImGuiCol_ButtonHovered, lighter(hovered, 0.12f));
+  ImGui::PushStyleColor(ImGuiCol_ButtonActive, lighter(hovered, 0.2f));
+  ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.02f, 0.1f, 0.02f, 1));  // Dark on bright reads best.
+  const bool pressed = ImGui::Button(label, size);
+  ImGui::PopStyleColor(4);
+  return pressed;
+}
+
+// Text at a whole multiple of the pixel font's size, which keeps it crisp.
+void BigText(const char* text, float times, const ImVec4& color) {
+  ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * times);
+  ImGui::TextColored(color, "%s", text);
+  ImGui::PopFont();
+}
+
 class LauncherDialog final : public rex::ui::DialogBase {
  public:
   enum class Result { kNone, kPlay, kQuit };
@@ -1382,14 +1442,20 @@ class LauncherDialog final : public rex::ui::DialogBase {
     }
     io.ConfigNavCaptureKeyboard = false;
     const float scale = ApplyUiScale(io);
+    DrawCourt(*ImGui::GetBackgroundDrawList(), io.DisplaySize, scale);
     const ImVec4 kGood(0.45f, 0.9f, 0.45f, 1), kWarn(1, 0.65f, 0.3f, 1);
     ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
                             ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(ImVec2(640 * scale, 0), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(660 * scale, 0), ImGuiCond_Always);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(18 * scale, 14 * scale));
     ImGui::Begin("NCAA Basketball 10##launcher", nullptr,
-                 ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse |
+                     ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                      ImGuiWindowFlags_NoSavedSettings);
+    ImGui::PopStyleVar();
+    BigText("NCAA BASKETBALL 10", 3, ImVec4(0.55f, 0.95f, 0.45f, 1));
     ImGui::TextDisabled("PC port, recompiled with ReXGlue  |  built %s", __DATE__);
+    ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
     // Whether keys are for the launcher: not while another window (Options, the F4 settings) has
@@ -1403,31 +1469,35 @@ class LauncherDialog final : public rex::ui::DialogBase {
       return true;
     }
 
+    const bool ok = check_ == GameCheck::kOk;
     switch (check_) {
       case GameCheck::kOk:
-        ImGui::TextColored(kGood, "Ready to play: game files found and verified.");
+        DrawStatus(kGood, "Ready to play", "Game files found and verified.", scale);
         break;
       case GameCheck::kWrongVersion:
-        ImGui::TextColored(kWarn, "These game files are a different version. This port needs the");
-        ImGui::TextColored(kWarn, "USA disc (Title ID 454108C3) without a title update.");
+        DrawStatus(kWarn, "Different version of the game",
+                   "This port needs the USA disc (Title ID 454108C3) without a title update.",
+                   scale);
         break;
       case GameCheck::kMissing:
-        ImGui::TextColored(kWarn, "The game is not set up yet. Choose your disc image below.");
+        DrawStatus(kWarn, "Game not set up yet",
+                   "Set it up from your disc image, or choose a folder you extracted it into.",
+                   scale);
         break;
     }
-    TextDimWrapped("Game folder: " + (folder_.empty() ? std::string("(none)") : Utf8(folder_)));
     if (!message_.empty()) {
+      ImGui::Spacing();
       ImGui::PushStyleColor(ImGuiCol_Text, message_is_error_ ? kWarn : kGood);
       ImGui::TextWrapped("%s", message_.c_str());
       ImGui::PopStyleColor();
     }
     ImGui::Spacing();
+    ImGui::Spacing();
 
-    // No mouse is needed: the arrow keys or the D-pad move the cursor, which starts on Play (or on
-    // disc setup when the game is not set up), Enter, Space or A press the button under it, and
-    // Esc quits. Enter or A with no button under the cursor (after a mouse click elsewhere) plays.
-    // Not with Alt held: Alt+Enter toggles fullscreen.
-    const bool ok = check_ == GameCheck::kOk;
+    // No mouse is needed: the arrow keys or the D-pad move the cursor, which starts on the large
+    // button (Play, or disc setup when the game is not set up), Enter, Space or A press the button
+    // under it, and Esc quits. Enter or A with no button under the cursor (after a mouse click
+    // elsewhere) plays. Not with Alt held: Alt+Enter toggles fullscreen.
     const bool play_key =
         keys && !ImGui::IsAnyItemFocused() &&
         ((!io.KeyAlt && (ImGui::IsKeyPressed(ImGuiKey_Enter, false) ||
@@ -1451,58 +1521,70 @@ class LauncherDialog final : public rex::ui::DialogBase {
     if (focus_frames_ > 0) {
       --focus_frames_;
     }
-    const float button_height = 44 * scale;
-    ImGui::BeginDisabled(!ok);
-    if (ImGui::Button("Play", ImVec2(200 * scale, button_height)) || (play_key && ok)) {
-      REXLOG_INFO("ncaabb10: launcher Play ({}; enter {} keypad {} pad A {} alt {})",
-                  play_key ? "key" : "button", ImGui::IsKeyDown(ImGuiKey_Enter),
-                  ImGui::IsKeyDown(ImGuiKey_KeypadEnter), ImGui::IsKeyDown(ImGuiKey_GamepadFaceDown),
-                  io.KeyAlt);
-      result_ = Result::kPlay;
+    // The large button is the step the player needs next: Play, or setting the game up.
+    const float button_height = 48 * scale;
+    const float side_width = 130 * scale;
+    const float gap = ImGui::GetStyle().ItemSpacing.x;
+    const float primary_width = ImGui::GetContentRegionAvail().x - 2 * (side_width + gap);
+    ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 2);
+    const bool primary = PrimaryButton(ok ? "Play" : "Set up from disc image...",
+                                       ImVec2(primary_width, button_height));
+    ImGui::PopFont();
+    if (ok) {
+      if (primary || play_key) {
+        REXLOG_INFO("ncaabb10: launcher Play ({}; enter {} keypad {} pad A {} alt {})",
+                    play_key ? "key" : "button", ImGui::IsKeyDown(ImGuiKey_Enter),
+                    ImGui::IsKeyDown(ImGuiKey_KeypadEnter),
+                    ImGui::IsKeyDown(ImGuiKey_GamepadFaceDown), io.KeyAlt);
+        result_ = Result::kPlay;
+      }
+    } else if (primary) {
+      PickIso();
     }
-    if (ok && appearing) {
+    if (appearing) {
       ImGui::SetKeyboardFocusHere(-1);
       ImGui::SetNavCursorVisible(true);
     }
-    ImGui::EndDisabled();
     ImGui::SameLine();
-    if (ImGui::Button("Options", ImVec2(130 * scale, button_height))) {
+    if (ImGui::Button("Options", ImVec2(side_width, button_height))) {
       ui_.ToggleOverlay("options");
     }
     ImGui::SameLine();
-    if (ImGui::Button("Quit", ImVec2(130 * scale, button_height))) {
+    if (ImGui::Button("Quit", ImVec2(side_width, button_height))) {
       result_ = Result::kQuit;
-    }
-    ImGui::TextDisabled("Arrows / D-pad: move    Enter / A: choose    Esc: Quit");
-    ImGui::TextDisabled("F1 / Guide: Options    F11 / Alt+Enter: Fullscreen");
-    if (pads.empty()) {
-      ImGui::TextDisabled("No controller found: the keyboard works as one (see Options).");
-    } else {
-      ImGui::TextDisabled("Controller: %s", pads.c_str());
     }
 
     ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::TextUnformatted("Game files, from your own disc");
-    if (ImGui::Button("Set up from a disc image (.iso)...")) {
+    ImGui::Spacing();
+    ImGui::TextDisabled("GAME FILES, FROM YOUR OWN DISC");
+    const ImVec2 small(0, 24 * scale);
+    if (ok && ImGui::Button("Set up again from a disc image...", small)) {
       PickIso();
     }
-    if (!ok && appearing) {
-      ImGui::SetKeyboardFocusHere(-1);
-      ImGui::SetNavCursorVisible(true);
+    if (ok) {
+      ImGui::SameLine();
     }
-    ImGui::SameLine();
-    if (ImGui::Button("Use an extracted folder...")) {
+    if (ImGui::Button("Use an extracted folder...", small)) {
       PickFolder();
     }
     ImGui::SameLine();
     ImGui::BeginDisabled(folder_.empty());
-    if (ImGui::Button("Open folder")) {
+    if (ImGui::Button("Open game folder", small)) {
       OpenFolder(folder_);
     }
     ImGui::EndDisabled();
 
     ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+    // Controls, then the controller and the launcher setting.
+    ImGui::TextDisabled("Arrows/D-pad: move   Enter/A: choose   Esc: quit   "
+                        "F1/Guide: Options   F11: fullscreen");
+    if (pads.empty()) {
+      ImGui::TextDisabled("No controller found: the keyboard works as one (see Options).");
+    } else {
+      ImGui::TextColored(kGood, "Controller: %s", pads.c_str());
+    }
     bool show = Settings().show_launcher.Get();
     if (ImGui::Checkbox("Show this launcher at startup", &show)) {
       SetAndSave("ncaabb10.show_launcher", show ? "true" : "false");
@@ -1529,8 +1611,40 @@ class LauncherDialog final : public rex::ui::DialogBase {
  private:
   void Recheck() { check_ = CheckGameFolder(folder_); }
 
+  // The game's state as a card: a bar in the state's color, a headline, what it means and the
+  // game folder. The card's fill goes on a channel under the text, which is laid out first.
+  void DrawStatus(const ImVec4& color, const char* headline, const char* detail, float scale) {
+    ImDrawList& draw = *ImGui::GetWindowDrawList();
+    const ImVec2 start = ImGui::GetCursorScreenPos();
+    const float width = ImGui::GetContentRegionAvail().x;
+    const float pad = 10 * scale, bar = 4 * scale;
+    draw.ChannelsSplit(2);
+    draw.ChannelsSetCurrent(1);
+    ImGui::SetCursorScreenPos(ImVec2(start.x + bar + pad, start.y + pad));
+    ImGui::BeginGroup();
+    ImGui::PushTextWrapPos(start.x + width - pad - ImGui::GetWindowPos().x);
+    ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 2);
+    ImGui::TextColored(color, "%s", headline);
+    ImGui::PopFont();
+    ImGui::TextWrapped("%s", detail);
+    TextDimWrapped("Game folder: " + (folder_.empty() ? std::string("(none)") : Utf8(folder_)));
+    ImGui::PopTextWrapPos();
+    ImGui::EndGroup();
+    const float bottom = ImGui::GetItemRectMax().y + pad;
+    draw.ChannelsSetCurrent(0);
+    const ImVec2 end(start.x + width, bottom);
+    draw.AddRectFilled(start, end, ImGui::GetColorU32(ImVec4(1, 1, 1, 0.04f)), 3 * scale);
+    draw.AddRectFilled(start, ImVec2(start.x + bar, bottom), ImGui::GetColorU32(color), 3 * scale,
+                       ImDrawFlags_RoundCornersLeft);
+    draw.ChannelsMerge();
+    // Past the card: Dummy so the window grows to hold the bottom padding.
+    ImGui::SetCursorScreenPos(start);
+    ImGui::Dummy(ImVec2(width, bottom - start.y));
+  }
+
   void DrawSetupProgress(bool keys, float scale) {
-    ImGui::TextUnformatted("Copying the game from your disc image...");
+    BigText("Setting up the game", 2, ImVec4(0.55f, 0.95f, 0.45f, 1));
+    ImGui::TextUnformatted("Copying the game files from your disc image...");
     ImGui::ProgressBar(extractor_->Progress(), ImVec2(-1, 0));
     const double done = static_cast<double>(extractor_->BytesDone());
     const double total = static_cast<double>(extractor_->BytesTotal());
