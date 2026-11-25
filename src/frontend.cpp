@@ -1585,11 +1585,14 @@ class LauncherDialog final : public rex::ui::DialogBase {
     ImGui::SetItemTooltip("Play from a folder you extracted the disc into yourself\n"
                           "(the one with default.xex in it).");
     ImGui::SameLine();
-    ImGui::BeginDisabled(folder_.empty());
+    // Only a folder that is there: Windows answers opening a missing one with an error box.
+    ImGui::BeginDisabled(!folder_exists_);
     if (ImGui::Button("Open game folder", small)) {
       OpenFolder(folder_);
     }
     ImGui::EndDisabled();
+    ImGui::SetItemTooltip(folder_exists_ ? "Show the game folder in your file manager."
+                                         : "The game folder does not exist yet.");
 
     ImGui::Spacing();
     ImGui::Separator();
@@ -1606,13 +1609,11 @@ class LauncherDialog final : public rex::ui::DialogBase {
     if (ImGui::Checkbox("Show this launcher at startup", &show)) {
       SetAndSave("ncaabb10.show_launcher", show ? "true" : "false");
     }
-    if (ImGui::IsItemHovered()) {
-      ImGui::SetTooltip("When off, the game starts directly. Hold Shift while starting to see "
-                        "the launcher again.");
-    }
+    ImGui::SetItemTooltip("When off, the game starts directly. Hold Shift while starting\n"
+                          "to see the launcher again.");
     if (!show) {
       ImGui::SameLine();
-      ImGui::TextDisabled("(hold Shift while starting to see it again)");
+      ImGui::TextDisabled("(hold Shift at startup to see it again)");
     }
     ImGui::End();
     if (result_ != Result::kNone) {
@@ -1626,7 +1627,12 @@ class LauncherDialog final : public rex::ui::DialogBase {
   bool WantsExclusiveInput() const override { return true; }
 
  private:
-  void Recheck() { check_ = CheckGameFolder(folder_); }
+  // Once per change, not per frame: both touch the disk.
+  void Recheck() {
+    check_ = CheckGameFolder(folder_);
+    std::error_code ec;
+    folder_exists_ = !folder_.empty() && fs::is_directory(folder_, ec);
+  }
 
   // The game's state as a card: a bar in the state's color, a headline, what it means and the
   // game folder. The card's fill goes on a channel under the text, which is laid out first.
@@ -1779,6 +1785,7 @@ class LauncherDialog final : public rex::ui::DialogBase {
   fs::path default_folder_;
   fs::path extract_to_;
   GameCheck check_ = GameCheck::kMissing;
+  bool folder_exists_ = false;
   std::string message_;
   bool message_is_error_ = false;
   bool was_ok_ = false;
