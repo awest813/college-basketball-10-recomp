@@ -1,0 +1,37 @@
+MIT License
+
+Copyright (c) 2026 the ncaabb10-recomp contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+--------------------------------------------------------------------------------
+
+Scope: this license covers this repository's own files (the source in src/, the
+tools, the build scripts and the documentation). It does not cover:
+
+- NCAA Basketball 10 itself, its files, or code generated from them (generated/,
+  and the recompiled code inside a built executable). Those belong to their
+  owners; you need your own copy of the game.
+- The ReXGlue SDK and the libraries it includes, which keep their own licenses
+  (see THIRD_PARTY_NOTICES.txt in a packaged build). The files in patches/ are
+  changes to the SDK and are offered under the SDK's BSD 3-Clause license, so
+  they can be applied to it on its own terms.
+
+NCAA, EA SPORTS and related names are trademarks of their owners. This project
+is not affiliated with or endorsed by them.

@@ -25,7 +25,9 @@ Worked on 2026-11-25. Each item says what is done and what is still open.
      - FFmpeg and libmspack, the two LGPL libraries
    - The file also says which DLL holds each library, which FFmpeg decoders are built, and how to
      rebuild the two DLLs that hold the LGPL code.
-   - **Open:** the repo has no LICENSE of its own. Choosing one is the owner's call.
+   - **Done:** the repo is under the MIT license (`LICENSE`, also in the zip as `LICENSE.txt`).
+     It covers the repo's own files, not the game, the generated code or the SDK. The SDK patches
+     are offered under the SDK's BSD 3-Clause license.
    - **Open, the owner's call:** `ncaabb10.exe` contains code translated from the game's
      `default.xex`. The repo holds none, but the zip does. Other static recompilation projects ship
      this way too; it's a legal question to weigh before sharing builds publicly.

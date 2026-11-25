@@ -33,6 +33,7 @@ try {
     Where-Object { $_.Name -like "rex*.dll" -or $wanted -contains $_.Name } |
     Copy-Item -Destination $stage
   Copy-Item "$d\README.md" $stage
+  Copy-Item "$d\LICENSE" "$stage\LICENSE.txt"
   & python -I "$d\tools\notices.py" $Sdk "$stage\THIRD_PARTY_NOTICES.txt"
   if ($LASTEXITCODE -ne 0) { throw "tools/notices.py failed" }
   if (Test-Path $Out) { Remove-Item $Out -Confirm:$false }

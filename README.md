@@ -4,6 +4,11 @@ Static recompilation of **NCAA Basketball 10 (Xbox 360, USA)** with [ReXGlue](ht
 targeting Windows and Linux. No game files or code generated from them are in this repository:
 you supply your own disc.
 
+The repository's own code is under the MIT license ([LICENSE](LICENSE)). That covers neither the
+game nor code generated from it, nor the ReXGlue SDK and its libraries, which keep their own
+licenses (the SDK patches in `patches/` are offered under the SDK's BSD 3-Clause license). Not
+affiliated with or endorsed by EA or the NCAA.
+
 Status (Windows, Direct3D 12 Xenos backend, patched SDK): a full Play Now game plays from tip-off
 to the post-game menu in a Release build; menus, profile, saves and the in-game broadcast overlays
 work. Linux builds and runs too (see Linux below).
@@ -144,7 +149,7 @@ full compile takes about 5 minutes on 14 jobs.
 The build copies the Visual C++ runtime DLLs the exe and the SDK import (`vcruntime140*.dll`,
 `msvcp140*.dll`) next to the exe, so the build folder runs on a PC without the VC++
 redistributable. `tools/package.ps1` packs a Release build into `out/ncaabb10-windows-x64.zip`
-(exe, DLLs, README, `THIRD_PARTY_NOTICES.txt`; about 30 MB) without logs, saves, options or linker
+(exe, DLLs, README, `LICENSE.txt`, `THIRD_PARTY_NOTICES.txt`; about 30 MB) without logs, saves, options or linker
 leftovers. The notices file is built by `tools/notices.py` from the SDK source the build used
 (`..\rexglue-sdk-src`, or `-Sdk <folder>`): the license of every library inside the shipped
 binaries, and where the source of the two LGPL ones (FFmpeg in `rexkernel.dll`, libmspack in
