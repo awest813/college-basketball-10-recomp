@@ -1,6 +1,6 @@
 # Gap list
 
-Audit of 2026-11-25, at commit 0aedae7; group 1 updated the same day. The items run most important first within each group.
+Audit of 2026-11-25, at commit 0aedae7; groups 1 and 4 updated the same day. The items run most important first within each group.
 "Checked" means it was run and looked at, not only read in code.
 
 What already holds:
@@ -74,8 +74,11 @@ Worked on 2026-11-25. Each item says what is done and what is still open.
    - There's no stated set of runtime libraries (libstdc++ from g++-13, `libvulkan.so.1`, SDL3's
      Wayland/X11 and audio backends).
    - The `linux-amd64` (stock SDK) preset was never built.
-8. **The Vulkan backend on Windows ships untried.** `rexgpu-xenos-vulkan.dll` is in the zip and
-   `gpu.driver=vulkan` selects it, but it was never run on Windows.
+8. **The Vulkan backend on Windows is slow.**
+   - **Checked:** `gpu.driver=vulkan` boots into a Play Now game and draws it the same as D3D12.
+   - It holds only about 30 fps in game on the A750, against 60 on D3D12, and logs hundreds of
+     `VulkanPipelineCache ... vertex_shader_not_found` errors.
+   - Options does not offer it. Why it's slow is not investigated.
 9. **Real high-resolution and high-DPI displays were not checked.**
    - The 1440p and 4K layouts were checked only on Xvfb virtual screens.
    - Windows was checked at 720p and in an 800x600 window.
@@ -103,24 +106,33 @@ Worked on 2026-11-25. Each item says what is done and what is still open.
 
 ## 4. Polish and code
 
-13. **Debug logging is left in on every start.** `OnTitleLaunch` (`src/main.cpp:381-394`) logs
-    every key binding's sources and two `FindBySetting` probes.
-14. **Alarming but harmless errors appear in every log.** Each load logs these at error level:
-    - six `BaseHeap::Release failed` / `PhysicalHeap::Release failed` pairs
-    - `no mount covers` for `UPDATE:\`, `rmcsave:` and `ShaderDumpxe:`
-    - an `unimplemented: XLiveBaseUnk58046` warning
+Worked on 2026-11-25; items 13-16 are done.
 
-    A player reading the log takes them for faults. Options: mount stubs for `UPDATE:` and
-    `rmcsave:`, or lower the double-free message for this known caller (`826C066C`).
-15. **Linux "Open game folder" can silently do nothing.**
-    - It uses `system("xdg-open '...'")` and skips any path containing `'`.
-    - Starting `xdg-open` directly (fork/exec), or with `SDL_OpenURL("file://...")`, would avoid
-      the shell entirely.
-16. **Some settings exist only in config files.**
-    - Buttons are remapped through `hid.keybind_*` in `ncaabb10.toml`, or the F4 SDK panel.
-    - The renderer (D3D12 or Vulkan) is chosen the same way.
+13. **Debug logging on every start: done.** The key binding dump and the `FindBySetting` probes
+    are gone from `OnTitleLaunch`. Binding parse errors still warn.
+14. **Harmless errors in every log: done.** A drive into a game now logs no errors.
+    - **Double frees:** `MmFreePhysicalMemory` skips a free of memory that is not allocated.
+      With tracing on, there were exactly six such frees, all from `826C066C`, and all were
+      skipped. The SDK would have refused them anyway.
+    - **`no mount covers`:** logged at debug level now, through the quiet-file-probes patch.
+    - **Delete on close:** also at debug level now.
+    - **The misleading "opening it for read" warning:** gone.
+    - **Still there:** five honest `NtCreateFile ... 0xc0000022` warnings for the `dirinfo` probes
+      and the `XLiveBaseUnk58046` stub. The README lists them.
+15. **Linux "Open game folder": done.**
+    - It now uses `SDL_OpenURL` with a percent-encoded `file://` URL, with no shell and any
+      folder name.
+    - Builds clean. Not run on a Linux desktop.
+16. **Settings only in config files: mostly done.**
+    - Options has **Keyboard controls**: each of the 25 pad inputs with its keys, a **Change**
+      button that takes the next key, and **Reset all keys**.
+    - **Checked:**
+      - Rebinding A to G is saved, and after a restart G presses A.
+      - Reset removes the changed keys from the options file, and Space is A again.
+    - The renderer stays in config files, on purpose (see item 8).
 17. **Test hooks ship in the Release exe.**
-    - These are the input-file feed, the virtual controllers and `NCAABB10_TEST_ISO`.
+    - These are the input-file feed, the virtual controllers, `NCAABB10_TEST_ISO` and
+      `NCAABB10_TEST_IMPORT`.
     - They're inactive unless an environment variable is set, so this is acceptable, but noted.
 
 ## 5. Project upkeep

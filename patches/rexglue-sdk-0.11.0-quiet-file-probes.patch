@@ -1,3 +1,32 @@
+diff --git a/src/filesystem/file_system.cpp b/src/filesystem/file_system.cpp
+index 01e2b072..821c0384 100644
+--- a/src/filesystem/file_system.cpp
++++ b/src/filesystem/file_system.cpp
+@@ -70,7 +70,9 @@ Result<FileSystem::Resolved> FileSystem::ResolveMount(std::string_view path,
+   });
+   if (provider == providers_.end()) {
+     if (log_missing) {
+-      REXFS_ERROR("no mount covers '{}'", path);
++      // A path on a device nothing is mounted at (a title update partition, a debug dump
++      // device) is an answer the caller passes on, as for a missing file; titles probe for them.
++      REXFS_DEBUG("no mount covers '{}'", path);
+     }
+     return Err<Resolved>(
+         BuildError(FileSystemError::kNoMount, std::format("no mount covers '{}'", path)));
+@@ -203,6 +205,13 @@ Result<Opened> FileSystem::OpenFrom(Node* root, std::string_view requested,
+ 
+   const bool wants_write =
+       HasFlags(access, Access::kWriteData) || HasFlags(access, Access::kAppendData);
++  if (!node && parent && parent->IsReadOnly()) {
++    // Nothing to open and nowhere to create it (titles probe the disc this way). Creating it
++    // below would be refused the same way.
++    REXFS_DEBUG("'{}' does not exist and its folder is read only", path);
++    return Err<Opened>(BuildError(FileSystemError::kAccessDenied,
++                                  std::format("cannot create '{}' on a read only mount", path)));
++  }
+   if (wants_write && ((parent && parent->IsReadOnly()) || (node && node->IsReadOnly()))) {
+     REXFS_WARN("'{}' is read only, opening it for read", path);
+     access = Access::kReadAccess | Access::kReadData;
 diff --git a/src/kernel/xboxkrnl/xboxkrnl_io.cpp b/src/kernel/xboxkrnl/xboxkrnl_io.cpp
 index 4f5a7753..2a8f7bdf 100644
 --- a/src/kernel/xboxkrnl/xboxkrnl_io.cpp
@@ -15,3 +44,16 @@ index 4f5a7753..2a8f7bdf 100644
      REXKRNL_WARN(
          "NtCreateFile failed "
          "path='{}' -> {:#x}",
+diff --git a/src/kernel/xboxkrnl/xboxkrnl_io_info.cpp b/src/kernel/xboxkrnl/xboxkrnl_io_info.cpp
+index 20a8c53b..5663a2af 100644
+--- a/src/kernel/xboxkrnl/xboxkrnl_io_info.cpp
++++ b/src/kernel/xboxkrnl/xboxkrnl_io_info.cpp
+@@ -225,7 +225,7 @@ u32 NtSetInformationFile_entry(u32 file_handle, GuestPtrT<X_IO_STATUS_BLOCK> io_
+       bool delete_on_close = info->delete_file ? true : false;
+       file->file->SetDeleteOnClose(delete_on_close);
+       out_length = 0;
+-      REXKRNL_WARN("NtSetInformationFile set the delete on close flag of {} to {}",
++      REXKRNL_DEBUG("NtSetInformationFile set the delete on close flag of {} to {}",
+                    file->file->GetInfo().name, delete_on_close);
+       break;
+     }

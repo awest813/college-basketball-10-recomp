@@ -1,5 +1,6 @@
 // ncaabb10 - diagnostics for the dirty-disc freeze (XamShowDirtyDiscErrorUI on the court loading
-// screen in some boots). Logs only; every hook calls the original.
+// screen in some boots). Logs only, and every hook calls the original, except that
+// MmFreePhysicalMemory skips a free of memory that is not allocated (see there).
 
 #include <algorithm>
 #include <chrono>
@@ -200,11 +201,23 @@ REX_HOOK_RAW(__imp__MmAllocatePhysicalMemoryEx) {
   }
 }
 
-// MmFreePhysicalMemory(type, address).
+// MmFreePhysicalMemory(type, address). Returns nothing.
+//
+// Each game load frees six small buffers twice in a row (from 826C066C). The SDK refuses the
+// second free without changing anything, but logs it as two errors. An address with no allocation
+// (MmQueryAllocationSize 0, as after the first free) is skipped here and logged at debug level,
+// which is the same outcome without the errors; any other free goes to the SDK as before.
 REX_HOOK_RAW(__imp__MmFreePhysicalMemory) {
   static const Func original = Original("__imp__MmFreePhysicalMemory");
+  static const Func query_size = Original("__imp__MmQueryAllocationSize");
+  const uint32_t address = ctx.r4.u32;
   if (TracePhysical()) {
-    REXLOG_INFO("ncaabb10: phys free {:08X} type={} (lr {:08X})", ctx.r4.u32, ctx.r3.u32, ctx.lr);
+    REXLOG_INFO("ncaabb10: phys free {:08X} type={} (lr {:08X})", address, ctx.r3.u32, ctx.lr);
+  }
+  if (query_size && address && CallExport(query_size, ctx, base, address) == 0) {
+    REXLOG_DEBUG("ncaabb10: phys free {:08X} again (not allocated), skipped (lr {:08X})", address,
+                 ctx.lr);
+    return;
   }
   CallOriginal(original, ctx, base);
 }

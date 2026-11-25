@@ -382,16 +382,6 @@ class Ncaabb10App : public rex::app::TitleApp {
     for (const auto& error : bindings.TakeParseErrors()) {
       REXLOG_WARN("ncaabb10: key binding: {}", error);
     }
-    for (size_t i = 0; i < bindings.GetCount(); ++i) {
-      for (const auto& source : bindings.GetSources(i)) {
-        REXLOG_INFO("ncaabb10: binding {} source type {} code {:#x}", i,
-                    static_cast<int>(source.type), static_cast<unsigned>(source.code));
-      }
-    }
-    for (const char* name : {"keybind_start", "hid.keybind_start"}) {
-      auto found = bindings.FindBySetting(name);
-      REXLOG_INFO("ncaabb10: FindBySetting({}) = {}", name, found ? static_cast<int>(*found) : -1);
-    }
     return TitleApp::OnTitleLaunch(title);
   }
 };

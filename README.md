@@ -85,8 +85,10 @@ The keyboard is also player 1's controller, alongside any pad (Options, "Keyboar
 | F, K | Left, right stick press |
 
 Options (F1) covers display (fullscreen, aspect ratio, render scale), graphics (texture filtering,
-vsync, render path), audio (volume, mute), controls (keyboard as pad, vibration, deadzones) and
-the player name (patched SDK) the game shows on its menus and save screens. Changes apply at once
+vsync, render path), audio (volume, mute), controls (keyboard as pad, vibration, deadzones, and
+under **Keyboard controls** the key for each pad input: **Change**, then press the new key; hold
+Esc to cancel; **Reset all keys** goes back to the table below) and the player name (patched SDK)
+the game shows on its menus and save screens. Changes apply at once
 and are saved to `ncaabb10_options.toml` beside the executable (they win over the same setting in
 `ncaabb10.toml`, which F4's "Save to config" writes; `REX_*` environment variables and the command
 line win over both); settings marked * apply after a restart and show the new choice until then (the player name applies on Play when changed from the launcher). Untick "Show this
@@ -185,7 +187,11 @@ Seven patches fix SDK 0.11.0 bugs that this game hits, or cut its cost:
   (upstream issue #627, still open). Changes code generation, so the game build regenerates.
 - `patches/rexglue-sdk-0.11.0-quiet-file-probes.patch`: every file the game looks for and does
   not find (about 70 optional `.db` and `dirinfo` files per load) was logged as a warning,
-  burying real ones. Not found now logs at debug level; other failed opens still warn.
+  burying real ones. Not found now logs at debug level; other failed opens still warn. A path on a
+  device nothing is mounted at (`UPDATE:\`, `rmcsave:`, a debug dump device) and setting delete on
+  close log at debug level too instead of as an error and a warning, and a missing file the game
+  asks to create in a read only disc folder is refused (as before) without first a warning that
+  it opens for read. Nothing the game gets back changes.
 
 To build with them:
 
@@ -218,11 +224,13 @@ during the intro, where 0.11.0 holds 60, and it had more long hitches over a 20 
 the guest page state of the buffer); set `NCAABB10_TRACE_PHYS=1` to also log physical allocations
 and frees.
 
-Expected log noise, all harmless: the game probes for files that are not on its disc (`D:\system1.bh`,
-`D:\data\mmdb\*.db`, `GAME:\dirinfo*`, `UPDATE:\`, `rmcsave:\` and others) and carries on, and
-each game load logs six `BaseHeap::Release failed` / `PhysicalHeap::Release failed` pairs: the
-game frees six small 64 KB-page buffers twice in a row (from `826C066C`), the SDK refuses the
-second free, and nothing leaks.
+A normal run logs no errors. The warnings left, all harmless: five `NtCreateFile failed
+path='GAME:\dirinfo*' -> 0xc0000022` (the game asks to create these on the disc, which is read
+only, and carries on), one `unimplemented: XLiveBaseUnk58046` (an Xbox Live call that the SDK
+answers with success) and the occasional read over 50 ms that `src/diagnostics.cpp` reports. Each
+game load also frees six small buffers twice in a row (from `826C066C`); the project's
+`MmFreePhysicalMemory` hook skips a free of memory that is not allocated, which the SDK would refuse
+anyway, and logs it at debug level instead of the SDK's two errors per free.
 
 ## Performance
 
@@ -253,6 +261,9 @@ override them) matter as well:
   the SDK's forced 4x (Options, Texture filtering, raises it).
 - `ui.aspect_ratio=16:9`: the game renders 16:9, and keeps that shape on 16:10 and ultrawide
   displays.
+- D3D12 on Windows. `--gpu.driver=vulkan` also runs there and draws the game the same, but holds
+  only about 30 fps in game on the A750 (and logs pipeline cache errors), so Options does not
+  offer it.
 
 Measuring: `NCAABB10_PERF=1` logs fps, frame times, CPU and the busiest threads every 5 s; `NCAABB10_PROFILE=1` (Windows only) adds a sampling profile of guest functions every 10 s (it
 costs fps while on), and `NCAABB10_PROFILE=callers` also names the game or SDK function behind

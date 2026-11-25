@@ -21,6 +21,7 @@
 #include <mutex>
 #include <optional>
 #include <set>
+#include <span>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -31,6 +32,8 @@
 
 #include <rex/app/title_app.h>
 #include <rex/bit.h>
+#include <rex/hid/binding.h>
+#include <rex/hid/input_system.h>
 #include <rex/input_keys.h>
 #include <rex/logging/log_category.h>
 #include <rex/path_settings.h>
@@ -50,6 +53,7 @@
 #else
 #include <SDL3/SDL_events.h>
 #include <SDL3/SDL_keyboard.h>
+#include <SDL3/SDL_misc.h>
 #include <SDL3/SDL_surface.h>
 #include <SDL3/SDL_timer.h>
 #include <SDL3/SDL_video.h>
@@ -76,6 +80,7 @@ FrontendSettings& Settings() {
 }
 
 rex::SettingsRegistry* g_registry = nullptr;
+rex::hid::IInputSystem* g_input = nullptr;  // Set by InstallUI; the key binding editor uses it.
 
 // ---------------------------------------------------------------------------------------------
 // Settings helpers
@@ -1158,6 +1163,52 @@ void Slider(const char* label, const char* setting, float min, float max, const 
   }
 }
 
+// The keyboard-as-controller bindings Options edits, in the order a pad's buttons are usually
+// listed. Each is an SDK setting (hid.keybind_*) holding a comma separated list of keys.
+struct KeyRow {
+  const char* setting;
+  const char* label;
+};
+constexpr KeyRow kKeyRows[] = {
+    {"hid.keybind_a", "A"},
+    {"hid.keybind_b", "B"},
+    {"hid.keybind_x", "X"},
+    {"hid.keybind_y", "Y"},
+    {"hid.keybind_start", "Start"},
+    {"hid.keybind_back", "Back"},
+    {"hid.keybind_left_shoulder", "Left shoulder"},
+    {"hid.keybind_right_shoulder", "Right shoulder"},
+    {"hid.keybind_left_trigger", "Left trigger"},
+    {"hid.keybind_right_trigger", "Right trigger"},
+    {"hid.keybind_lstick_up", "Left stick up"},
+    {"hid.keybind_lstick_down", "Left stick down"},
+    {"hid.keybind_lstick_left", "Left stick left"},
+    {"hid.keybind_lstick_right", "Left stick right"},
+    {"hid.keybind_lstick_press", "Left stick press"},
+    {"hid.keybind_rstick_up", "Right stick up"},
+    {"hid.keybind_rstick_down", "Right stick down"},
+    {"hid.keybind_rstick_left", "Right stick left"},
+    {"hid.keybind_rstick_right", "Right stick right"},
+    {"hid.keybind_rstick_press", "Right stick press"},
+    {"hid.keybind_dpad_up", "D-pad up"},
+    {"hid.keybind_dpad_down", "D-pad down"},
+    {"hid.keybind_dpad_left", "D-pad left"},
+    {"hid.keybind_dpad_right", "D-pad right"},
+    {"hid.keybind_guide", "Guide"},
+};
+
+// The keys of a binding as the settings write them ("Space, Semicolon"), or a dash for none.
+std::string KeysText(rex::hid::IBindingSet& bindings, size_t binding) {
+  std::string text;
+  for (const rex::InputSource& source : bindings.GetSources(binding)) {
+    const std::string name = rex::InputSourceToString(source);
+    if (!name.empty()) {
+      text += (text.empty() ? "" : ", ") + name;
+    }
+  }
+  return text.empty() ? "-" : text;
+}
+
 class OptionsDialog final : public rex::ui::DialogBase {
  public:
   explicit OptionsDialog(rex::ui::IUISystem& ui) : ui_(ui) {}
@@ -1176,10 +1227,17 @@ class OptionsDialog final : public rex::ui::DialogBase {
     // Esc, or B or Start on a controller, closes Options. B only when it is not backing out of
     // a list or a slider: last frame nothing was open or being changed. Start not with Back held:
     // Back + Start is the shortcut, which closes Options itself.
-    bool open = !ImGui::IsKeyPressed(ImGuiKey_Escape, false) &&
-                !(ImGui::IsKeyPressed(ImGuiKey_GamepadStart, false) &&
-                  !ImGui::IsKeyDown(ImGuiKey_GamepadBack)) &&
-                !(ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) && !busy_);
+    // While a key binding waits for a key, every key belongs to it (Esc held cancels it).
+    const bool capturing = capture_ != nullptr;
+    // The SDK holds key presses back from the input system, where the capture reads them, while
+    // ImGui wants the keyboard. Keyboard navigation claims it, so it lets go while a key is
+    // awaited (the rows are disabled then, so a key cannot press anything here either).
+    io.ConfigNavCaptureKeyboard = !capturing;
+    bool open = capturing ||
+                (!ImGui::IsKeyPressed(ImGuiKey_Escape, false) &&
+                 !(ImGui::IsKeyPressed(ImGuiKey_GamepadStart, false) &&
+                   !ImGui::IsKeyDown(ImGuiKey_GamepadBack)) &&
+                 !(ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) && !busy_));
     if (ImGui::Begin("Options##ncaabb10", &open, ImGuiWindowFlags_NoCollapse)) {
       if (ImGui::CollapsingHeader("Display", ImGuiTreeNodeFlags_DefaultOpen)) {
         Checkbox("Fullscreen (Alt+Enter, F11)", "ui.fullscreen");
@@ -1201,8 +1259,10 @@ class OptionsDialog final : public rex::ui::DialogBase {
         Checkbox("Wait for display vsync", "gpu.vsync",
                  "Off is smoother: the game paces itself at 60 fps");
         // Each renderer has its own setting; "any" is D3D12 on Windows and Vulkan elsewhere.
-        const std::string driver = GetText("gpu.driver");
+        const std::string driver = GetShown("gpu.driver");
 #if defined(_WIN32)
+        // No renderer choice here: Vulkan on Windows draws the game right but at about 30 fps
+        // in game on the A750, against 60 on D3D12 (gpu.driver=vulkan still selects it).
         const bool vulkan = driver == "vulkan";
 #else
         const bool vulkan = driver == "vulkan" || driver == "any";
@@ -1239,6 +1299,10 @@ class OptionsDialog final : public rex::ui::DialogBase {
         Checkbox("Vibration", "hid.vibration");
         Slider("Left stick deadzone", "hid.left_stick_deadzone", 0.0f, 0.5f, "%.2f");
         Slider("Right stick deadzone", "hid.right_stick_deadzone", 0.0f, 0.5f, "%.2f");
+      }
+      if (GetShown("hid.mnk_mode") == "true" && g_input &&
+          ImGui::CollapsingHeader("Keyboard controls")) {
+        DrawKeyBindings(scale);
       }
       if (g_registry && g_registry->Find("kernel.gamertag") &&
           ImGui::CollapsingHeader("Profile", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -1287,9 +1351,11 @@ class OptionsDialog final : public rex::ui::DialogBase {
       ImGui::TextDisabled("Controller: D-pad to move, A to choose, B to go back or close");
     }
     busy_ = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId) || ImGui::IsAnyItemActive() ||
-            ImGui::IsKeyDown(ImGuiKey_GamepadFaceRight);
+            ImGui::IsKeyDown(ImGuiKey_GamepadFaceRight) || capture_ != nullptr;
     ImGui::End();
     if (!open) {
+      capture_.reset();  // A capture must not outlive the input system.
+      capturing_ = -1;
       // Close through the overlay registry rather than by returning false: the registry then
       // releases the input block Options holds (SDK 0.11.0 keeps it after a self-close).
       ui_.ShowOverlay("options", false);
@@ -1300,9 +1366,105 @@ class OptionsDialog final : public rex::ui::DialogBase {
   bool WantsExclusiveInput() const override { return true; }
 
  private:
+  // One row per pad input: its keys and a Change button that takes the next key pressed.
+  void DrawKeyBindings(float scale) {
+    rex::hid::IBindingSet& bindings = g_input->GetKeyBindings();
+    if (capture_) {
+      if (const auto source = capture_->Poll()) {
+        Rebind(bindings, capturing_, *source);
+        capture_.reset();
+        capturing_ = -1;
+      } else if (capture_->WasCanceled()) {
+        key_note_ = "Canceled; the keys stay as they were.";
+        capture_.reset();
+        capturing_ = -1;
+      }
+    }
+    ImGui::TextDisabled("Change, then press the new key. Hold Esc to cancel.");
+    // Nothing can be pressed while a key is awaited: Enter or Space would press a button too.
+    ImGui::BeginDisabled(capture_ != nullptr);
+    if (ImGui::BeginTable("keys", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) {
+      ImGui::TableSetupColumn("input", ImGuiTableColumnFlags_WidthFixed, 130 * scale);
+      ImGui::TableSetupColumn("keys", ImGuiTableColumnFlags_WidthStretch);
+      ImGui::TableSetupColumn("change", ImGuiTableColumnFlags_WidthFixed);
+      for (int row = 0; row < static_cast<int>(std::size(kKeyRows)); ++row) {
+        const auto binding = bindings.FindBySetting(kKeyRows[row].setting);
+        if (!binding) {
+          continue;
+        }
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted(kKeyRows[row].label);
+        ImGui::TableNextColumn();
+        if (row == capturing_) {
+          ImGui::EndDisabled();
+          ImGui::TextColored(kTitleColorOptions, "Press a key...");
+          ImGui::BeginDisabled(true);
+        } else {
+          ImGui::TextUnformatted(KeysText(bindings, *binding).c_str());
+        }
+        ImGui::TableNextColumn();
+        ImGui::PushID(row);
+        if (ImGui::SmallButton("Change")) {
+          capture_ = g_input->CreateKeyCapture({});
+          capture_->Begin();
+          capturing_ = row;
+          key_note_.clear();
+        }
+        ImGui::PopID();
+      }
+      ImGui::EndTable();
+    }
+    if (ImGui::Button("Reset all keys")) {
+      // Back to the defaults, and out of the options file, which keeps only what was changed.
+      for (const KeyRow& row : kKeyRows) {
+        if (const auto binding = bindings.FindBySetting(row.setting)) {
+          (void)bindings.Reset(*binding);
+        }
+        g_user_values.erase(row.setting);
+        g_applied.erase(row.setting);
+      }
+      Save();
+      key_note_ = "All keys are back to their defaults.";
+    }
+    ImGui::EndDisabled();
+    if (!key_note_.empty()) {
+      TextDimWrapped(key_note_);
+    }
+  }
+
+  // The new key replaces the input's keys. A key another input already uses stays there too, and
+  // the note says so.
+  void Rebind(rex::hid::IBindingSet& bindings, int row, const rex::InputSource& source) {
+    const auto binding = bindings.FindBySetting(kKeyRows[row].setting);
+    const std::string name = rex::InputSourceToString(source);
+    if (!binding || name.empty()) {
+      key_note_ = "That key can't be used.";
+      return;
+    }
+    if (!bindings.SetSources(*binding, std::span<const rex::InputSource>(&source, 1))) {
+      key_note_ = "That key can't be used.";
+      return;
+    }
+    SetAndSave(kKeyRows[row].setting, GetText(kKeyRows[row].setting));
+    key_note_ = std::format("{} is now {}.", kKeyRows[row].label, name);
+    if (const auto other = bindings.FindConflict(*binding, source)) {
+      for (const KeyRow& candidate : kKeyRows) {
+        if (bindings.FindBySetting(candidate.setting) == other) {
+          key_note_ += std::format(" {} uses it too.", candidate.label);
+        }
+      }
+    }
+  }
+
+  static constexpr ImVec4 kTitleColorOptions{0.55f, 0.95f, 0.45f, 1};
+
   rex::ui::IUISystem& ui_;
   bool busy_ = true;
   char gamertag_[16] = {};  // A gamertag is at most 15 characters.
+  std::unique_ptr<rex::hid::IKeyCapture> capture_;
+  int capturing_ = -1;  // The kKeyRows index awaiting a key.
+  std::string key_note_;
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -1879,9 +2041,18 @@ class LauncherDialog final : public rex::ui::DialogBase {
 #if defined(_WIN32)
     ShellExecuteW(nullptr, L"open", folder.wstring().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
 #else
-    const std::string command = "xdg-open '" + folder.string() + "' >/dev/null 2>&1 &";
-    if (folder.string().find('\'') == std::string::npos) {
-      (void)std::system(command.c_str());
+    // A file:// URL, every byte outside the unreserved set percent-encoded, so any folder name
+    // works. SDL hands it to xdg-open directly, without a shell.
+    std::string url = "file://";
+    for (const unsigned char c : folder.native()) {
+      if (std::isalnum(c) || c == '/' || c == '-' || c == '_' || c == '.' || c == '~') {
+        url += static_cast<char>(c);
+      } else {
+        url += std::format("%{:02X}", c);
+      }
+    }
+    if (!SDL_OpenURL(url.c_str())) {
+      REXLOG_WARN("ncaabb10: could not open {}: {}", url, SDL_GetError());
     }
 #endif
   }
@@ -2083,6 +2254,7 @@ void InstallUI(rex::app::TitleApp& app) {
 #if !defined(_WIN32)
   SetWindowIcon();
 #endif
+  g_input = &app.GetInput();
   rex::ui::IUISystem& ui = app.GetUI();
   static constexpr rex::ui::OverlayConfig kOverlays[] = {
       {"options", {rex::VirtualKey::kF1, rex::KeyModifiers::kNone},
@@ -2100,6 +2272,7 @@ void InstallUI(rex::app::TitleApp& app) {
 
 void UninstallUI() {
   g_pad_shortcuts.Stop();
+  g_input = nullptr;
   // Keeps what the player last chose in F4 for settings Options manages, for the next start.
   if (AdoptOtherChanges()) {
     Save();
