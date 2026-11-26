@@ -84,17 +84,29 @@ The keyboard is also player 1's controller, alongside any pad (Options, "Keyboar
 | Q, E | Left, right trigger |
 | F, K | Left, right stick press |
 
-Options (F1) covers display (fullscreen, aspect ratio, render scale, FXAA), graphics (texture filtering,
-vsync, render path), audio (volume, mute), controls (keyboard as pad, vibration, deadzones, and
-under **Keyboard controls** the key for each pad input: **Change**, then press the new key; hold
-Esc to cancel; **Reset all keys** goes back to the table below) and the player name (patched SDK)
-the game shows on its menus and save screens. Changes apply at once
-and are saved to `ncaabb10_options.toml` beside the executable (they win over the same setting in
-`ncaabb10.toml`, which F4's "Save to config" writes; `REX_*` environment variables and the command
-line win over both); settings marked * apply after a restart and show the new choice until then (the player name applies on Play when changed from the launcher). Untick "Show this
-launcher at startup" to go straight to the game; hold Shift while starting to see the launcher
-again. On a large display (fullscreen at 1440p or 4K) the launcher and Options scale up in whole
-steps, so they stay readable from a couch.
+Options (F1) has:
+- **Display:** fullscreen, aspect ratio, render resolution, anti-aliasing (FXAA).
+- **Graphics:** texture filtering, vsync, render path.
+- **Audio:** volume, mute.
+- **Controls:** keyboard as controller, vibration and stick deadzones. Under **Keyboard
+  controls**, each pad input's key: **Change**, then press the new key (hold Esc to cancel);
+  **Reset all keys** goes back to the table above.
+- **Profile:** the player name the game shows on its menus and save screens (patched SDK).
+- At the bottom: **Restart now** when a change waits for a restart, **Reset all...** (every
+  option back to its default, keeping the game folder and player name, then a restart) and, in
+  game, **Quit game...**. In game, restarting and quitting ask first, since progress since the
+  last save is lost; a restart goes straight back into the game.
+
+The game keeps running behind Options, so pause it first (Start). Changes apply at once and are
+saved to `ncaabb10_options.toml` beside the executable. Settings marked * apply after a restart:
+Options shows the new choice and lists them under "Restart to apply". The options file wins over
+the same setting in `ncaabb10.toml`, which F4's "Save to config" writes; `REX_*` environment
+variables and the command line win over both.
+
+Untick "Show this launcher at startup" to go straight to the game; hold Shift while starting to
+see the launcher again. On a large display (fullscreen at 1440p or 4K) the launcher and Options
+scale up in whole steps, so they stay readable from a couch. The mouse cursor hides after 3
+seconds without moving.
 
 ### Saves
 
@@ -334,6 +346,11 @@ breakpoint can go on the game's own instructions.
 | `NCAABB10_TEST_ISO=<iso>` | Starts the disc image setup on that file |
 | `NCAABB10_TEST_IMPORT=<folder>` | Starts **Bring over saves** from that folder |
 | `NCAABB10_TEST_CRASH=1` | Crashes on purpose, to check the crash report |
+| `NCAABB10_SKIP_LAUNCHER=1` | Skips the launcher once. Options sets it for the new process when it restarts a running game |
+
+A restart from Options starts the new process with the same command line and environment, so a
+test's `NCAABB10_INPUT_FILE` follows it: start that file over (empty it) once the restart is under
+way, or the new process plays every line again.
 
 Each is read only when set, so a normal run is not affected.
 

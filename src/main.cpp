@@ -342,6 +342,12 @@ class Ncaabb10App : public rex::app::TitleApp {
         // Each start writes logs/ncaabb10_<run>.log, and the SDK keeps every one by default (a
         // tester's folder reached 320 files). Keep the newest 50 MB of older runs.
         {"log.folder_budget", "52428800"},
+        // The window and taskbar name. Empty, the SDK shows the app name and its own build
+        // ("ncaabb10 [rexglue-v0.11.0...-Release]"); the log's first lines carry that.
+        {"ui.title", "NCAA Basketball 10"},
+        // The SDK never hides an idle mouse cursor, so one stayed over the game in fullscreen.
+        // Moving the mouse shows it again.
+        {"ui.cursor_timeout", "3"},
     };
     for (const Default& d : kDefaults) {
       if (auto set = settings.SetText(rex::SettingLayer::kTitle, d.name, d.value); !set) {

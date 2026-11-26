@@ -10,6 +10,7 @@
 #include <cctype>
 #include <cerrno>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -31,6 +32,7 @@
 
 #include <imgui.h>
 
+#include <rex/app/app.h>
 #include <rex/app/title_app.h>
 #include <rex/bit.h>
 #include <rex/hid/binding.h>
@@ -82,6 +84,11 @@ FrontendSettings& Settings() {
 
 rex::SettingsRegistry* g_registry = nullptr;
 rex::hid::IInputSystem* g_input = nullptr;  // Set by InstallUI; the key binding editor uses it.
+// Past the launcher: the title runs (or is about to). Options then offers Quit game, and a restart
+// goes straight back into the game.
+bool g_in_game = false;
+// Set for the new process by a restart from a running game, so it skips the launcher once.
+constexpr char kSkipLauncherVariable[] = "NCAABB10_SKIP_LAUNCHER";
 
 // ---------------------------------------------------------------------------------------------
 // Settings helpers
@@ -357,6 +364,66 @@ double GetDouble(std::string_view name, double fallback) {
   } catch (...) {
     return fallback;
   }
+}
+
+// What Options calls the settings that can wait for a restart, for its "Restart to apply" line.
+std::string PendingLabels() {
+  static const std::map<std::string, std::string> kLabels = {
+      {"gpu.resolution_scale_x", "Render resolution"},
+      {"gpu.resolution_scale_y", "Render resolution"},
+      {"gpu.xenos.swap_post_effect", "Anti-aliasing"},
+      {"gpu.d3d12.render_target_path", "Render path"},
+      {"gpu.vulkan.render_target_path", "Render path"},
+      {"kernel.gamertag", "Player name"},
+  };
+  // Changes Options holds back (settings fixed for this run), and kRestart settings, which take a
+  // change at once but use it only from the next start (the registry tracks those, also when F4
+  // changed them).
+  std::vector<std::string> names;
+  for (const auto& [name, value] : g_next_start) {
+    names.push_back(name);
+  }
+  if (g_registry) {
+    for (const std::string& name : g_registry->GetRestartPending()) {
+      names.push_back(name);
+    }
+  }
+  std::vector<std::string> labels;
+  for (const std::string& name : names) {
+    const auto label = kLabels.find(name);
+    const std::string text = label != kLabels.end() ? label->second : name;
+    if (std::find(labels.begin(), labels.end(), text) == labels.end()) {
+      labels.push_back(text);
+    }
+  }
+  std::string out;
+  for (const std::string& label : labels) {
+    out += (out.empty() ? "" : ", ") + label;
+  }
+  return out;
+}
+
+// Sets a variable in the environment a relaunch inherits; an empty value removes it.
+void SetEnvironment(const char* name, const char* value) {
+#if defined(_WIN32)
+  _putenv_s(name, value);  // Updates the process environment too, not only the C runtime's copy.
+#else
+  if (*value) {
+    setenv(name, value, 1);
+  } else {
+    unsetenv(name);
+  }
+#endif
+}
+
+// Starts the game again with the same arguments once this process has shut down. From a running
+// game it goes straight back into the game; from the launcher, back to the launcher.
+void Restart() {
+  REXLOG_INFO("ncaabb10: restart from Options ({})", g_in_game ? "in game" : "launcher");
+  if (g_in_game) {
+    SetEnvironment(kSkipLauncherVariable, "1");
+  }
+  rex::app::RequestRestart();
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1149,11 +1216,12 @@ void Combo(const char* label, const char* setting, const char* const (&labels)[N
   }
 }
 
-void Slider(const char* label, const char* setting, float min, float max, const char* format) {
-  float value = static_cast<float>(GetDouble(setting, min));
-  const bool changed = ImGui::SliderFloat(label, &value, min, max, format);
+// A setting from 0 to max, shown as a percentage of 1 (1.0 is 100%).
+void PercentSlider(const char* label, const char* setting, float max, const char* help) {
+  float percent = static_cast<float>(GetDouble(setting, 0) * 100);
+  const bool changed = ImGui::SliderFloat(label, &percent, 0, max * 100, "%.0f%%");
   char text[32];
-  std::snprintf(text, sizeof(text), "%.3f", value);
+  std::snprintf(text, sizeof(text), "%.3f", std::round(percent) / 100);
   // Heard and felt while dragging; written to the options file once, on release.
   if (changed && ImGui::IsItemActive()) {
     if (g_registry) {
@@ -1161,6 +1229,9 @@ void Slider(const char* label, const char* setting, float min, float max, const 
     }
   } else if (changed || ImGui::IsItemDeactivatedAfterEdit()) {
     SetAndSave(setting, text);
+  }
+  if (help) {
+    ImGui::SetItemTooltip("%s", help);
   }
 }
 
@@ -1240,12 +1311,18 @@ class OptionsDialog final : public rex::ui::DialogBase {
                    !ImGui::IsKeyDown(ImGuiKey_GamepadBack)) &&
                  !(ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) && !busy_));
     if (ImGui::Begin("Options##ncaabb10", &open, ImGuiWindowFlags_NoCollapse)) {
+      if (g_in_game) {
+        // The title has no pause of its own here: a live game's clock keeps going.
+        ImGui::TextDisabled("The game keeps running behind Options; pause it first (Start).");
+      }
       if (ImGui::CollapsingHeader("Display", ImGuiTreeNodeFlags_DefaultOpen)) {
         Checkbox("Fullscreen (Alt+Enter, F11)", "ui.fullscreen");
         Checkbox("Exclusive fullscreen", "ui.fullscreen_exclusive",
                  "Changes the display mode instead of using a borderless window");
         static const char* const ratio_labels[] = {"Stretch", "16:9", "16:10", "21:9", "4:3"};
         Combo("Aspect ratio", "ui.aspect_ratio", ratio_labels, kAspectRatios);
+        ImGui::SetItemTooltip("The game draws 16:9. 16:9 keeps that shape with black bars on\n"
+                              "other displays; Stretch fills the screen.");
         static const char* const scale_labels[] = {"1x (720p)", "2x (1440p)", "3x (2160p)"};
         static const char* const scale_values[] = {"1", "2", "3"};
         const std::string scale = GetShown("gpu.resolution_scale_x");
@@ -1264,6 +1341,8 @@ class OptionsDialog final : public rex::ui::DialogBase {
       }
       if (ImGui::CollapsingHeader("Graphics", ImGuiTreeNodeFlags_DefaultOpen)) {
         Combo("Texture filtering", "gpu.anisotropic_override", kAnisoLabels, kAnisoValues);
+        ImGui::SetItemTooltip("Game default filters as the console did. Higher values sharpen\n"
+                              "the floor at a distance; 16x cost nothing measurable on an Arc A750.");
         Checkbox("Wait for display vsync", "gpu.vsync",
                  "Off is smoother: the game paces itself at 60 fps");
         // Each renderer has its own setting; "any" is D3D12 on Windows and Vulkan elsewhere.
@@ -1286,9 +1365,14 @@ class OptionsDialog final : public rex::ui::DialogBase {
           static const char* const path_values[] = {"rtv", "rov"};
           Combo("Render path *", "gpu.d3d12.render_target_path", path_labels, path_values);
         }
+        if (vulkan || driver != "null") {
+          ImGui::SetItemTooltip("Fast draws this game correctly and holds 60 fps. Accurate copies the\n"
+                                "console's render targets more exactly but is much slower: 13-50 fps\n"
+                                "in game on an Arc A750 with Direct3D 12.");
+        }
       }
       if (ImGui::CollapsingHeader("Audio", ImGuiTreeNodeFlags_DefaultOpen)) {
-        Slider("Volume", "apu.gain", 0.0f, 2.0f, "%.2f");
+        PercentSlider("Volume", "apu.gain", 2.0f, "Above 100% can distort loud moments.");
         Checkbox("Mute", "apu.mute");
         Checkbox("Mute when the window is in the background", "apu.mute_unfocused");
       }
@@ -1305,8 +1389,11 @@ class OptionsDialog final : public rex::ui::DialogBase {
                  "W/A/S/D left stick, arrows right stick, Shift+arrows D-pad\n"
                  "1/3 shoulders, Q/E triggers");
         Checkbox("Vibration", "hid.vibration");
-        Slider("Left stick deadzone", "hid.left_stick_deadzone", 0.0f, 0.5f, "%.2f");
-        Slider("Right stick deadzone", "hid.right_stick_deadzone", 0.0f, 0.5f, "%.2f");
+        static constexpr char kDeadzoneHelp[] =
+            "Stick movement ignored near the center, on top of the game's own.\n"
+            "Raise it if a worn stick drifts.";
+        PercentSlider("Left stick deadzone", "hid.left_stick_deadzone", 0.5f, kDeadzoneHelp);
+        PercentSlider("Right stick deadzone", "hid.right_stick_deadzone", 0.5f, kDeadzoneHelp);
       }
       if (GetShown("hid.mnk_mode") == "true" && g_input &&
           ImGui::CollapsingHeader("Keyboard controls")) {
@@ -1347,21 +1434,57 @@ class OptionsDialog final : public rex::ui::DialogBase {
         }
       }
       ImGui::Separator();
-      ImGui::TextDisabled("Saved to %s. * applies after a restart.",
-                          Utf8(OptionsFile().filename()).c_str());
-      if (ImGui::Button("All settings (F4)")) {
-        ui_.ToggleOverlay("settings");
+      // Settings marked * that changed while the game ran wait for the next start; say which,
+      // and offer that start now.
+      const std::string pending = PendingLabels();
+      if (!pending.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, kWarnColor);
+        ImGui::TextWrapped("Restart to apply: %s.", pending.c_str());
+        ImGui::PopStyleColor();
+      } else {
+        ImGui::TextDisabled("Saved to %s. * applies after a restart.",
+                            Utf8(OptionsFile().filename()).c_str());
       }
-      ImGui::SameLine();
-      if (ImGui::Button("Close")) {
-        open = false;
+      if (confirm_ != Confirm::kNone) {
+        DrawConfirm();
+      } else {
+        if (ImGui::Button("Close")) {
+          open = false;
+        }
+        if (!pending.empty()) {
+          ImGui::SameLine();
+          RefocusIf(Confirm::kRestart);
+          if (ImGui::Button("Restart now")) {
+            Ask(Confirm::kRestart);
+          }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("All settings (F4)")) {
+          ui_.ToggleOverlay("settings");
+        }
+        ImGui::SameLine();
+        RefocusIf(Confirm::kReset);
+        if (ImGui::Button("Reset all...")) {
+          Ask(Confirm::kReset);
+        }
+        ImGui::SetItemTooltip("Every option here back to its default (the game folder and player\n"
+                              "name stay), then a restart.");
+        if (g_in_game) {
+          ImGui::SameLine();
+          RefocusIf(Confirm::kQuit);
+          if (ImGui::Button("Quit game...")) {
+            Ask(Confirm::kQuit);
+          }
+        }
       }
       ImGui::TextDisabled("Controller: D-pad to move, A to choose, B to go back or close");
     }
     busy_ = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId) || ImGui::IsAnyItemActive() ||
-            ImGui::IsKeyDown(ImGuiKey_GamepadFaceRight) || capture_ != nullptr;
+            ImGui::IsKeyDown(ImGuiKey_GamepadFaceRight) || capture_ != nullptr ||
+            confirm_ != Confirm::kNone;
     ImGui::End();
     if (!open) {
+      confirm_ = Confirm::kNone;
       capture_.reset();  // A capture must not outlive the input system.
       capturing_ = -1;
       // Close through the overlay registry rather than by returning false: the registry then
@@ -1374,6 +1497,94 @@ class OptionsDialog final : public rex::ui::DialogBase {
   bool WantsExclusiveInput() const override { return true; }
 
  private:
+  // A step that ends this run waits for a yes when the game is running (unsaved progress would
+  // be lost); from the launcher a restart loses nothing and goes at once.
+  enum class Confirm { kNone, kRestart, kReset, kQuit };
+
+  void Ask(Confirm what) {
+    if (what == Confirm::kRestart && !g_in_game) {
+      Restart();
+      return;
+    }
+    confirm_ = what;
+    confirm_focus_ = true;
+  }
+
+  void DrawConfirm() {
+    const char* question = "";
+    const char* yes = "";
+    switch (confirm_) {
+      case Confirm::kRestart:
+        question = "Restart the game now? It starts again from the intro.";
+        yes = "Restart";
+        break;
+      case Confirm::kReset:
+        question = "Reset every option here to its default and restart? The game folder and "
+                   "player name stay.";
+        yes = "Reset and restart";
+        break;
+      case Confirm::kQuit:
+        question = "Quit to the desktop?";
+        yes = "Quit";
+        break;
+      case Confirm::kNone:
+        return;
+    }
+    ImGui::PushStyleColor(ImGuiCol_Text, kWarnColor);
+    ImGui::TextWrapped("%s%s", question,
+                       g_in_game ? " Progress since your last save is lost." : "");
+    ImGui::PopStyleColor();
+    if (ImGui::Button(yes)) {
+      const Confirm what = confirm_;
+      confirm_ = Confirm::kNone;
+      if (what == Confirm::kQuit) {
+        REXLOG_INFO("ncaabb10: quit from Options");
+        rex::app::RequestShutdown(0);
+      } else {
+        if (what == Confirm::kReset) {
+          ResetOptions();
+        }
+        Restart();
+      }
+      return;
+    }
+    ImGui::SameLine();
+    // The cursor starts on Cancel, so a stray A press does nothing; B cancels too.
+    if (confirm_focus_) {
+      ImGui::SetKeyboardFocusHere();
+      ImGui::SetNavCursorVisible(true);
+      confirm_focus_ = false;
+    }
+    if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false)) {
+      refocus_ = confirm_;  // Back on the button that asked; Cancel itself goes away.
+      confirm_ = Confirm::kNone;
+    }
+  }
+
+  // Puts the controller cursor on the next button if a canceled question came from it.
+  void RefocusIf(Confirm from) {
+    if (refocus_ == from) {
+      ImGui::SetKeyboardFocusHere();
+      ImGui::SetNavCursorVisible(true);
+      refocus_ = Confirm::kNone;
+    }
+  }
+
+  // Empties the options file but for the game folder and the player name. The new values take
+  // effect with the restart that follows: this run's settings already hold the old ones.
+  static void ResetOptions() {
+    const auto kept = [](const std::string& name) {
+      return name == "title.game_root" || name == "kernel.gamertag";
+    };
+    std::erase_if(g_user_values, [&](const auto& entry) { return !kept(entry.first); });
+    std::erase_if(g_next_start, [&](const auto& entry) { return !kept(entry.first); });
+    std::erase_if(g_applied, [&](const auto& entry) { return !kept(entry.first); });
+    REXLOG_INFO("ncaabb10: options reset to their defaults");
+    Save();
+  }
+
+  static constexpr ImVec4 kWarnColor{1, 0.65f, 0.3f, 1};
+
   // One row per pad input: its keys and a Change button that takes the next key pressed.
   void DrawKeyBindings(float scale) {
     rex::hid::IBindingSet& bindings = g_input->GetKeyBindings();
@@ -1473,6 +1684,9 @@ class OptionsDialog final : public rex::ui::DialogBase {
   std::unique_ptr<rex::hid::IKeyCapture> capture_;
   int capturing_ = -1;  // The kKeyRows index awaiting a key.
   std::string key_note_;
+  Confirm confirm_ = Confirm::kNone;
+  bool confirm_focus_ = false;
+  Confirm refocus_ = Confirm::kNone;
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -2305,15 +2519,24 @@ bool RunLauncher(rex::app::TitleApp& app) {
   }
   const GameCheck check = CheckGameFolder(folder);
   const bool shift = ShiftHeld();
-  REXLOG_INFO("ncaabb10: launcher: game folder '{}' check {} show_launcher {} shift {}", Utf8(folder),
-              static_cast<int>(check), Settings().show_launcher.Get(), shift);
-  if (check == GameCheck::kOk && !Settings().show_launcher.Get() && !shift) {
+  // A restart from a running game (Options) goes straight back in, once.
+  const char* skip = std::getenv(kSkipLauncherVariable);
+  const bool restarted = skip && *skip;
+  if (restarted) {
+    SetEnvironment(kSkipLauncherVariable, "");
+  }
+  REXLOG_INFO("ncaabb10: launcher: game folder '{}' check {} show_launcher {} shift {} restarted {}",
+              Utf8(folder), static_cast<int>(check), Settings().show_launcher.Get(), shift,
+              restarted);
+  if (check == GameCheck::kOk && ((!Settings().show_launcher.Get() && !shift) || restarted)) {
     UseFolderThisSession(folder);
+    g_in_game = true;
     return true;
   }
   if (app.GetUI().IsHeadless()) {
     if (check == GameCheck::kOk) {
       UseFolderThisSession(folder);
+      g_in_game = true;
       return true;
     }
     REXLOG_ERROR("ncaabb10: no verified game files; set title.game_root");
@@ -2327,7 +2550,7 @@ bool RunLauncher(rex::app::TitleApp& app) {
   }
   REXLOG_INFO("ncaabb10: launcher closed: {}", view->result() == LauncherDialog::Result::kPlay   ? "play"
                                                   : view->result() == LauncherDialog::Result::kQuit ? "quit"
-                                                                                                   : "window closed");
+                                                                                                   : "window closed or restart");
   if (view->result() != LauncherDialog::Result::kPlay) {
     return false;
   }
@@ -2336,6 +2559,7 @@ bool RunLauncher(rex::app::TitleApp& app) {
       SetAndSave("title.game_root", *text);
     }
   }
+  g_in_game = true;
   return true;
 }
 

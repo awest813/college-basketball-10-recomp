@@ -205,3 +205,38 @@ Worked on 2026-11-25; items 13-16 are done.
       - Visual Studio's vcvars printed a `vswhere.exe` error on every build; hidden.
     - **Open:** no CI (it could build the SDK, but not the game, which needs `default.xex`).
       `symbolize.py` is untried on a Linux crash.
+
+## 6. Player experience
+
+23. **UX audit (2026-11-26).** The launcher, Options and the move into the game were driven
+    with the keyboard and the test controller, and each screen was looked at.
+    - **Fixed:**
+      - The window and taskbar said "ncaabb10 [rexglue-v0.11.0.8-dev...-Release]"; they now say
+        "NCAA Basketball 10".
+      - The SDK never hides an idle mouse cursor, so one stayed over the game in fullscreen. It
+        now hides after 3 seconds without moving (`ui.cursor_timeout`). Not looked at by eye:
+        the test screenshots don't show the cursor.
+      - Options had no way to quit; a fullscreen player needed Alt+F4. It now has **Quit
+        game...**, in game only.
+      - A setting marked * that waits for a restart said nothing more. Options now lists them
+        ("Restart to apply: Anti-aliasing.") with **Restart now**, which goes straight back
+        into the game. Render resolution and anti-aliasing take a change at once in the
+        settings but use it only from the next start, the launcher included; the list covers
+        those too.
+      - Nothing undid a bad combination of options. **Reset all...** empties the options file
+        (keeping the game folder and the player name) and restarts.
+      - In game, Restart, Reset and Quit ask first, with the cursor on Cancel; B cancels, and
+        the cursor goes back to the button that asked.
+      - Volume and deadzones showed raw numbers (1.00, 0.00); they show percentages now.
+        Aspect ratio, texture filtering, render path, volume and the deadzones have tooltips.
+        Render path's says Accurate ran at 13-50 fps.
+      - In game, Options says the game keeps running behind it.
+    - **Checked:**
+      - FXAA changed in game: the line appeared. Cancel, then Restart: a new process about
+        1 s later, which skipped the launcher.
+      - In that process, Quit game ended it.
+      - Reset all from the launcher emptied the options file and opened the launcher again.
+      - Linux builds with 0 warnings; it was not run.
+    - **Open:**
+      - Options can't pause the game: the SDK has no pause for the title's threads.
+      - The launcher's Esc quits at once, without asking. Nothing is lost there.
