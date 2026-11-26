@@ -64,7 +64,11 @@ target_link_libraries(ncaabb10 PRIVATE ncaabb10_common)
 add_dependencies(ncaabb10 ncaabb10_git_rev)
 # SIMDe's loops ask for vectorization, which the Debug build's -O1 does not do; clang said so once
 # per use (2675 warnings in a Debug build). The higher levels of the other builds vectorize them.
-target_compile_options(ncaabb10_recompiled PRIVATE $<$<CONFIG:Debug>:-Wno-pass-failed>)
+# The target exists once codegen has run (the first configure of a clean checkout has none yet;
+# the SDK configures again after codegen, and then it does).
+if (TARGET ncaabb10_recompiled)
+  target_compile_options(ncaabb10_recompiled PRIVATE $<$<CONFIG:Debug>:-Wno-pass-failed>)
+endif ()
 target_include_directories(ncaabb10 PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 target_compile_definitions(ncaabb10 PRIVATE NCAABB10_VERSION="${PROJECT_VERSION}"
                                             NCAABB10_CONFIG="$<CONFIG>")
