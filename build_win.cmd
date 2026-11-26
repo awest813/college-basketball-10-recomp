@@ -54,4 +54,13 @@ if not exist "%SDKDIR%\lib\cmake\rexglue\rexglueTargets-%CFG%.cmake" (
 call "%~dp0tools\vcvars.cmd" || exit /b 1
 call "%~dp0tools\check_tools.cmd" || exit /b 1
 cmake --preset %PRESET% || exit /b 1
+rem A clean checkout has no generated code, so that configure knew no recompiled sources: the SDK
+rem picks them up from generated\default\sources.cmake, which codegen writes during the build, after
+rem Ninja has read its build files. Run codegen alone first and configure again, or the first build
+rem links without the game's code.
+if not exist "generated\default\sources.cmake" (
+  echo Generating the recompiled code first ^(a clean checkout, about 2 minutes^)
+  cmake --build --preset %PRESET%-%CONFIG% --target ncaabb10_codegen || exit /b 1
+  cmake --preset %PRESET% || exit /b 1
+)
 cmake --build --preset %PRESET%-%CONFIG% -j %JOBS%

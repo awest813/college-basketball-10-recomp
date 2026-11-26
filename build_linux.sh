@@ -51,5 +51,17 @@ fi
 tools/check_tools.sh
 cc=clang; cxx=clang++
 if command -v clang-20 >/dev/null; then cc=clang-20; cxx=clang++-20; fi
-cmake --preset "$preset" -DCMAKE_C_COMPILER="$cc" -DCMAKE_CXX_COMPILER="$cxx" -DCMAKE_LINKER_TYPE=LLD "${extra[@]}"
+configure() {
+  cmake --preset "$preset" -DCMAKE_C_COMPILER="$cc" -DCMAKE_CXX_COMPILER="$cxx" -DCMAKE_LINKER_TYPE=LLD "${extra[@]}"
+}
+configure
+# A clean checkout has no generated code, so that configure knew no recompiled sources: the SDK
+# picks them up from generated/default/sources.cmake, which codegen writes during the build, after
+# Ninja has read its build files. Run codegen alone first and configure again, or the first build
+# links without the game's code.
+if [ ! -f generated/default/sources.cmake ]; then
+  echo "Generating the recompiled code first (a clean checkout, about 2 minutes)"
+  cmake --build --preset "$preset-$config" --target ncaabb10_codegen
+  configure
+fi
 cmake --build --preset "$preset-$config" -j "$jobs"
