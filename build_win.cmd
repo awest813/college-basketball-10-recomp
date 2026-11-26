@@ -39,7 +39,7 @@ if not defined SDKDIR (
 )
 if not exist "%SDKDIR%\lib\cmake\rexglue\rexglueConfig.cmake" (
   if /i "%PRESET%"=="win-amd64-patched" (
-    echo The patched SDK is not built yet. Run tools\setup_sdk.cmd first ^(about 15 minutes^).
+    echo The patched SDK is not built yet. Run tools\setup_sdk.cmd first ^(about 20 minutes^).
   ) else (
     echo The stock SDK is not in %SDKDIR%. Unpack rexglue-sdk-0.11.0-win-amd64.zip from
     echo https://github.com/rexglue/rexglue-sdk/releases/tag/v0.11.0 beside this folder.
@@ -59,7 +59,7 @@ rem picks them up from generated\default\sources.cmake, which codegen writes dur
 rem Ninja has read its build files. Run codegen alone first and configure again, or the first build
 rem links without the game's code.
 if not exist "generated\default\sources.cmake" (
-  echo Generating the recompiled code first ^(a clean checkout, about 2 minutes^)
+  echo Generating the recompiled code first ^(a clean checkout, about 10 minutes^)
   cmake --build --preset %PRESET%-%CONFIG% --target ncaabb10_codegen || exit /b 1
   cmake --preset %PRESET% || exit /b 1
 )

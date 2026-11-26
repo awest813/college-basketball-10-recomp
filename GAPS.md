@@ -185,6 +185,11 @@ Worked on 2026-11-25; items 13-16 are done.
       - A missing tool, `assets/default.xex`, SDK or SDK configuration gave CMake or compiler
         errors. The build scripts now stop first with what to do. `tools/check_tools` finds
         LLVM's default Windows folder and checks for clang 20.
+      - The first build of a clean checkout failed to link (4 unresolved externals): the SDK
+        learns the generated sources at configure time, and codegen writes them during the
+        build. Earlier builds never hit this because `generated/` was always there. The build
+        scripts now run codegen first and configure again. Checked: a fresh clone and a fresh
+        SDK from `tools/setup_sdk.cmd` built in one run with 0 warnings and booted to 60 fps.
       - The job count was fixed at 12-14; it is now the processor count.
       - The log never said which build wrote it. Its first `ncaabb10:` line, and the launcher,
         now give the version, commit and configuration.

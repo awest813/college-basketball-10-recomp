@@ -33,7 +33,7 @@ case "$preset" in
       sdkdir="$(cd "$REXGLUE_SDK_SRC" && pwd)/out/install/linux-amd64"
       extra+=(-DCMAKE_PREFIX_PATH="$sdkdir")
     fi
-    hint="run tools/setup_sdk.sh first (about 15 minutes)" ;;
+    hint="run tools/setup_sdk.sh first (about 20 minutes)" ;;
   linux-amd64)
     sdkdir="${REXGLUE_SDK:?set REXGLUE_SDK to the unpacked stock SDK (its linux-amd64 folder)}"
     hint="unpack rexglue-sdk-0.11.0-linux-amd64.zip from https://github.com/rexglue/rexglue-sdk/releases/tag/v0.11.0 and set REXGLUE_SDK to its linux-amd64 folder" ;;
@@ -60,7 +60,7 @@ configure
 # Ninja has read its build files. Run codegen alone first and configure again, or the first build
 # links without the game's code.
 if [ ! -f generated/default/sources.cmake ]; then
-  echo "Generating the recompiled code first (a clean checkout, about 2 minutes)"
+  echo "Generating the recompiled code first (a clean checkout, about 10 minutes)"
   cmake --build --preset "$preset-$config" --target ncaabb10_codegen
   configure
 fi

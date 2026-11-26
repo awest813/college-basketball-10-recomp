@@ -145,7 +145,7 @@ run_win.cmd
 ```
 
 `tools\setup_sdk.cmd` runs once. It puts the patched SDK beside this folder (see Patched SDK below)
-and builds it, which takes about 15 minutes. `build_win.cmd` builds the Release game into
+and builds it, which took about 20 minutes from an empty folder here. `build_win.cmd` builds the Release game into
 `out\build\win-amd64-patched\Release`, and `run_win.cmd` starts it.
 
 Each script stops early with a message that says what to do: when a tool is missing
@@ -166,8 +166,11 @@ the bugs the patches fix. Anything after the build words goes to the game unchan
 Saves go to `out/build/win-amd64-patched/Release/user/` (see Saves above); the console's utility
 drive (`cache:`) is backed by `user/cache/`.
 
-Codegen runs as part of the build (about 2 minutes, 50k functions, ~270 MB of C++); the first
-full compile takes about 5 minutes on 14 jobs.
+Codegen runs as part of the build (50k functions, ~270 MB of C++). On a clean checkout here (20
+threads) it took about 11 minutes and the compile about 8. Codegen runs again only when
+`default.xex`, the manifest or the SDK changes; a change to the port's own code rebuilds in under
+two minutes. `build_win.cmd` runs codegen on its own before the first build of a clean checkout,
+because the build files only list the generated sources once they exist.
 
 The build copies the Visual C++ runtime DLLs the exe and the SDK import (`vcruntime140*.dll`,
 `msvcp140*.dll`) next to the exe, so the build folder runs on a PC without the VC++
