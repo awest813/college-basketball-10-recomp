@@ -79,6 +79,26 @@ Worked on 2026-11-25. Each item says what is done and what is still open.
    - It holds only about 30 fps in game on the A750, against 60 on D3D12, and logs hundreds of
      `VulkanPipelineCache ... vertex_shader_not_found` errors.
    - Options does not offer it. Why it's slow is not investigated.
+8a. **Renderer audit (Windows, D3D12, 2026-11-25).** Each setting was driven into a Play Now
+    game with `NCAABB10_PERF=1`.
+    - **Fixed: no shader cache in packaged builds.** The SDK's default `app.cache_root` is
+      empty, which stores nothing. Only `run_win.cmd` passed a folder. The port now defaults to
+      `cache/` beside `user/`.
+      - A cold-cache run had a 161 ms hitch that the warm run did not.
+      - Checked: the first run creates the cache, and the second loads from it.
+    - **Added:** Options > Anti-aliasing (FXAA, the SDK's swap post effect). It costs no
+      measurable fps, and the broadcast text stays sharp.
+    - **Measured:**
+      - 2x resolution holds 60 fps, with a one-time pipeline rebuild after the change.
+      - 3x resolution runs at about 40 fps; the Options tooltip now says so.
+      - ROV runs at 13-50 fps.
+      - 16x filtering costs nothing measurable.
+      - All of them draw correctly.
+    - **Open:**
+      - Every run holds a steady 30 fps for about 30 s of the pregame presentation, with the CPU
+        and GPU idle. This looks like the game's own pacing, but it isn't confirmed against a
+        console.
+      - Exclusive fullscreen was not tried, since it changes the monitor's display mode.
 9. **Real high-resolution and high-DPI displays were not checked.**
    - The 1440p and 4K layouts were checked only on Xvfb virtual screens.
    - Windows was checked at 720p and in an 800x600 window.

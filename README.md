@@ -84,7 +84,7 @@ The keyboard is also player 1's controller, alongside any pad (Options, "Keyboar
 | Q, E | Left, right trigger |
 | F, K | Left, right stick press |
 
-Options (F1) covers display (fullscreen, aspect ratio, render scale), graphics (texture filtering,
+Options (F1) covers display (fullscreen, aspect ratio, render scale, FXAA), graphics (texture filtering,
 vsync, render path), audio (volume, mute), controls (keyboard as pad, vibration, deadzones, and
 under **Keyboard controls** the key for each pad input: **Change**, then press the new key; hold
 Esc to cancel; **Reset all keys** goes back to the table below) and the player name (patched SDK)
@@ -109,8 +109,9 @@ you must be signed in to Xbox Live, as the console does offline.
 
 ### Updating to a newer version
 
-The zip holds no `user/`, `game/` or options file, so unpacking a newer one over the old folder
-(replace the files it asks about) keeps the saves, the options and the game. Unpacked into a
+The zip holds no `user/`, `game/`, `cache/` or options file, so unpacking a newer one over the
+old folder (replace the files it asks about) keeps the saves, the options, the shader cache and
+the game. Unpacked into a
 folder of its own instead, the new copy starts without saves: its launcher then offers **Bring
 over saves from an older copy**, which copies the old copy's saves and options (the old copy keeps
 them) and, when the game is set up there, plays from that copy's `game/` folder. Choosing a game
@@ -261,6 +262,15 @@ override them) matter as well:
   the SDK's forced 4x (Options, Texture filtering, raises it).
 - `ui.aspect_ratio=16:9`: the game renders 16:9, and keeps that shape on 16:10 and ultrawide
   displays.
+- `app.cache_root={app.root}/cache`: compiled shaders and pipelines are kept in `cache/` beside
+  `user/` and loaded on later runs (`run_win.cmd` uses `out\cache`). The SDK's default is no
+  cache folder, which keeps nothing: every run compiled each shader again as it first appeared,
+  with hitches up to 160 ms in the first minutes of a game that a warm cache does not have.
+- Render resolution 2x (1440p) held 60 fps in game on the A750 and 3x (2160p) about 40; the first
+  start after a change spends a second or two rebuilding pipelines. FXAA (Options, Anti-aliasing)
+  costs no measurable fps. Every run, at any setting, drops to a steady 30 fps for about 30 s of
+  the pregame presentation with the CPU and GPU mostly idle; it looks like the game's own pacing
+  of that sequence and returns to 60 when play starts.
 - D3D12 on Windows. `--gpu.driver=vulkan` also runs there and draws the game the same, but holds
   only about 30 fps in game on the A750 (and logs pipeline cache errors), so Options does not
   offer it.

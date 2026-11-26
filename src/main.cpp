@@ -334,6 +334,10 @@ class Ncaabb10App : public rex::app::TitleApp {
         // The keyboard is player 1's controller too, so the game is playable without a pad. A
         // connected pad still works: the keyboard merges into user 0 with the first pad.
         {"hid.mnk_mode", "true"},
+        // Compiled shaders and pipelines kept on disk (cache/shaders beside user/). The SDK's
+        // default is no cache folder, which stores nothing: every run compiled every shader again
+        // as it first appeared, with hitches up to 160 ms in the first minutes of a game.
+        {"app.cache_root", "{app.root}/cache"},
     };
     for (const Default& d : kDefaults) {
       if (auto set = settings.SetText(rex::SettingLayer::kTitle, d.name, d.value); !set) {
