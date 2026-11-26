@@ -2,6 +2,7 @@
 // toggle (Alt+Enter or F11). Settings changed here apply at once and are saved to the config file.
 
 #include "frontend.h"
+#include "ncaabb10_git.h"  // NCAABB10_GIT, written by the build (cmake/git_rev.cmake)
 
 #include <algorithm>
 #include <array>
@@ -1784,8 +1785,8 @@ class LauncherDialog final : public rex::ui::DialogBase {
                      ImGuiWindowFlags_NoSavedSettings);
     ImGui::PopStyleVar();
     BigText("NCAA BASKETBALL 10", 3, kTitleColor);
-    ImGui::TextDisabled("PC port %s, recompiled with ReXGlue  |  built %s", NCAABB10_VERSION,
-                        __DATE__);
+    ImGui::TextDisabled("PC port %s (%s), recompiled with ReXGlue  |  built %s", NCAABB10_VERSION,
+                        NCAABB10_GIT, __DATE__);
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();

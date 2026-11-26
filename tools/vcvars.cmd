@@ -25,5 +25,10 @@ echo Visual Studio with the C++ x64 tools was not found. Install Visual Studio 2
 echo with the "Desktop development with C++" workload.
 exit /b 1
 :found
-call "%NCAABB10_VCVARS%" >nul || exit /b 1
+rem Its stderr is dropped: the 2022 Build Tools' vcvars64.bat prints "'vswhere.exe' is not
+rem recognized" there on every call and still succeeds.
+call "%NCAABB10_VCVARS%" >nul 2>nul || (
+  echo "%NCAABB10_VCVARS%" failed.
+  exit /b 1
+)
 exit /b 0

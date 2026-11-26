@@ -125,22 +125,42 @@ unrecognized app; **More info**, then **Run anyway**, starts it. The exe carries
 
 ## Building on Windows
 
-Needs Visual Studio 2022 or later, any edition, or its Build Tools (MSVC + Windows SDK), CMake
-3.25+, Ninja, a clang++ on PATH (tested with clang 22) and the disc extracted into `assets/` (see
-above). The presets make clang target `x86_64-pc-windows-msvc` and link with `link.exe`, because the
-SDK binaries use the MSVC ABI; `build_win.cmd` sets up the Visual Studio environment first
-(`tools\vcvars.cmd` finds it with vswhere).
+Needs:
+
+- Visual Studio 2022 or later, any edition, or its Build Tools, with the **Desktop development
+  with C++** workload (MSVC and the Windows SDK).
+- clang 20 or newer from LLVM: `winget install LLVM.LLVM` (tested with clang 22). Visual Studio's
+  own clang is 19, too old.
+- CMake 3.25 or newer and Ninja: `winget install Kitware.CMake Ninja-build.Ninja`, or Visual
+  Studio's **C++ CMake tools for Windows** component.
+- Git, and Python 3 for the scripts in `tools/`.
+- The disc extracted into `assets/` (see above).
+
+From a fresh clone:
 
 ```
-build_win.cmd release
+tools\setup_sdk.cmd
+build_win.cmd
 run_win.cmd
 ```
 
-Both default to the `win-amd64-patched` preset, which builds against the patched SDK in
-`..\rexglue-sdk-src` (Release only; see Patched SDK below). `build_win.cmd debug 14 win-amd64` and
-`run_win.cmd stock debug` use the stock SDK 0.11.0 release instead, unpacked beside this folder as
-`rexglue-sdk-0.11.0-win-amd64/win-amd64`; it still has the bugs the patches fix. Anything after
-the build words goes to the game unchanged, for example
+`tools\setup_sdk.cmd` runs once. It puts the patched SDK beside this folder (see Patched SDK below)
+and builds it, which takes about 15 minutes. `build_win.cmd` builds the Release game into
+`out\build\win-amd64-patched\Release`, and `run_win.cmd` starts it.
+
+Each script stops early with a message that says what to do: when a tool is missing
+(`tools\check_tools.cmd`, which also finds LLVM in its default folder when it is not on PATH), when
+`assets\default.xex` or the SDK is missing, or when the SDK has no build of the configuration
+asked for. The presets make clang target `x86_64-pc-windows-msvc` and link with `link.exe`,
+because the SDK binaries use the MSVC ABI. `tools\vcvars.cmd` finds Visual Studio with vswhere.
+The build uses every processor unless the second argument says otherwise
+(`build_win.cmd release 8`).
+
+`build_win.cmd debug` and `build_win.cmd relwithdebinfo` need the SDK built in that configuration
+too (see Debugging below). `build_win.cmd debug 0 win-amd64` and `run_win.cmd stock debug` use the
+stock SDK 0.11.0 instead, unpacked beside this folder as `rexglue-sdk-0.11.0-win-amd64/win-amd64`
+from its [release page](https://github.com/rexglue/rexglue-sdk/releases/tag/v0.11.0). It still has
+the bugs the patches fix. Anything after the build words goes to the game unchanged, for example
 `run_win.cmd --ncaabb10.show_launcher=true --hid.keybind_a=Space,J`.
 
 Saves go to `out/build/win-amd64-patched/Release/user/` (see Saves above); the console's utility
@@ -194,26 +214,20 @@ Seven patches fix SDK 0.11.0 bugs that this game hits, or cut its cost:
   asks to create in a read only disc folder is refused (as before) without first a warning that
   it opens for read. Nothing the game gets back changes.
 
-To build with them:
+`tools\setup_sdk.cmd [jobs] [release|debug|relwithdebinfo|all]` sets them up beside this folder.
+It skips any step that is already done, so after a failure fix the cause and run it again:
 
-```
-git clone --branch v0.11.0 --recurse-submodules https://github.com/rexglue/rexglue-sdk.git ..\rexglue-sdk-src
-git -C ..\rexglue-sdk-src apply ..\ncaabb10-recomp\patches\rexglue-sdk-0.11.0-texture-watch-race.patch
-git -C ..\rexglue-sdk-src apply ..\ncaabb10-recomp\patches\rexglue-sdk-0.11.0-physical-heap-release-race.patch
-git -C ..\rexglue-sdk-src apply ..\ncaabb10-recomp\patches\rexglue-sdk-0.11.0-overlay-self-close.patch
-git -C ..\rexglue-sdk-src apply ..\ncaabb10-recomp\patches\rexglue-sdk-0.11.0-profile-name.patch
-git -C ..\rexglue-sdk-src apply ..\ncaabb10-recomp\patches\rexglue-sdk-0.11.0-register-write-lookup.patch
-git -C ..\rexglue-sdk-src apply ..\ncaabb10-recomp\patches\rexglue-sdk-0.11.0-dcbz-cache-block.patch
-git -C ..\rexglue-sdk-src apply ..\ncaabb10-recomp\patches\rexglue-sdk-0.11.0-quiet-file-probes.patch
-tools\build_vulkan_deps.cmd
-tools\build_sdk.cmd
-build_win.cmd release 12 win-amd64-patched
-```
+1. Clones the SDK at `v0.11.0` with its submodules into `..\rexglue-sdk-src`.
+2. Applies each patch with `git apply`. It says "Applied already" for a patch that is in, and
+   stops if one does not apply.
+3. Shallow-clones Vulkan-Headers and Vulkan-Loader `v1.4.363` and VulkanMemoryAllocator `v3.3.0`
+   into `..\vulkan-deps`, and builds them into `..\vulkan-deps\prefix`
+   (`tools\build_vulkan_deps.cmd`). Skipped when `VULKAN_SDK` names a LunarG SDK.
+4. Builds and installs the SDK into `..\rexglue-sdk-src\out\install\win-amd64`
+   (`tools\build_sdk.cmd`). Release is the default.
 
-`tools\build_vulkan_deps.cmd` needs `..\vulkan-deps` with Vulkan-Headers and Vulkan-Loader at
-`v1.4.363` and VulkanMemoryAllocator at `v3.3.0` (or set `VULKAN_SDK` to a LunarG SDK instead).
-The patched SDK is Release only, so use the stock preset for Debug builds (which still have these
-bugs).
+After a change to the SDK source or to a patch, `tools\build_sdk.cmd` alone rebuilds it. Any of
+Release, Debug and RelWithDebInfo can be installed side by side.
 
 Upstream's development branch (nightly `44b7fdc5`, 2026-11-22, 66 commits after 0.11.0) was
 tried with these patches and dropped. Its critical section handoff (`1a8d4199`, `ccc231e9`) leaves
@@ -232,6 +246,93 @@ answers with success) and the occasional read over 50 ms that `src/diagnostics.c
 game load also frees six small buffers twice in a row (from `826C066C`); the project's
 `MmFreePhysicalMemory` hook skips a free of memory that is not allocated, which the SDK would refuse
 anyway, and logs it at debug level instead of the SDK's two errors per free.
+
+## Debugging
+
+### Logs
+
+- Each start writes `logs\ncaabb10_<run>.log` beside the exe. The port keeps the newest 50 MB of
+  older runs; set `--log.folder_budget=<bytes>` to change that, or 0 to keep every one.
+- The first `ncaabb10:` line names the build that wrote the log, for example
+  `PC port 0.1.0, commit 9ef275f, Release build of Nov 25 2026`. The commit ends in `-dirty` when
+  the build had uncommitted changes. The launcher shows the same commit under its title.
+- `--log.level=debug` (or `trace`) logs more from everything.
+  `--log.categories.<category>=debug` does it for one category: the column after the level letter
+  in each line (`core`, `gpu`, `kernel`, `xam`, `hid`, ...).
+- With a debugger attached, the log also goes to its output window.
+
+### Crashes
+
+A crash ends the log with a crash report and shows a dialog that says so. The report has the
+exception, the registers, and a backtrace whose frames are `module+offset`. To name them:
+
+```
+python -I tools\symbolize.py out\build\win-amd64-patched\Release\logs\ncaabb10_321.log
+```
+
+It prints the report with each frame named, using llvm-symbolizer from LLVM:
+
+- A recompiled game function comes out as `sub_<guest address>`.
+- The port's and the SDK's own code come out with file and line.
+
+A Release build keeps what this needs beside the exe: `ncaabb10.pdb`, with every recompiled
+function's name and the port's code, and the SDK's Release PDBs. The SDK build installs them and
+the game's build copies them over. With them the Release link takes about 7 s, and
+`ncaabb10.pdb` is about 12 MB. They are not in the zip.
+
+For a crash on someone else's PC, they send the log. `tools\package.ps1` writes
+`ncaabb10-windows-x64-symbols.zip` beside each zip it packs: keep it with that build. Unpack both
+zips into one folder and pass it as `--bin <folder>`. `NCAABB10_TEST_CRASH=1` crashes on purpose
+in the game's first physical allocation, to check all of this end to end.
+
+On Linux the binaries keep their symbols, and the script reads the report the same way. It needs
+llvm-symbolizer (`sudo apt install llvm-20`), which `tools/fetch_toolchain.sh` does not fetch.
+It has not been tried on a Linux crash yet.
+
+### Debug builds
+
+The SDK builds in Debug or RelWithDebInfo as well, and installs beside Release:
+
+```
+tools\build_sdk.cmd 0 debug
+build_win.cmd debug
+run_win.cmd debug
+```
+
+The first line takes about 11 minutes. `all` builds all three configurations.
+
+- **Debug:** the port's code unoptimized, the recompiled code at `-O1` with line tables. The
+  game build takes about 8 minutes. On the A750 it reached the title screen at 60 fps, at 32-42
+  fps while the intros load. It was not measured in a game.
+- **RelWithDebInfo:** optimized, with line tables everywhere. It runs close to Release, which
+  makes it the one to use under a debugger.
+
+Debug and RelWithDebInfo each build into their own folder under `out\build\win-amd64-patched\`, so
+each keeps its own `user\` saves and options.
+
+To debug in Visual Studio, open the exe with
+`devenv /debugexe out\build\win-amd64-patched\Debug\ncaabb10.exe --title.game_root=<assets>`
+(`run_win.cmd` passes the same arguments). WinDbg or VS Code's C++ debugger work the same way.
+
+Generated code is in `generated\default\ncaabb10_recomp.*.cpp`. Each function is named
+`sub_<guest address>`, and each PowerPC instruction is a comment above the C++ it became, so a
+breakpoint can go on the game's own instructions.
+
+### Environment variables
+
+| Variable | Does |
+| --- | --- |
+| `NCAABB10_PERF=1` | Logs fps, frame times, CPU and the busiest threads every 5 s |
+| `NCAABB10_PROFILE=1` or `callers` | Windows: a sampling profile of guest functions every 10 s (see Performance) |
+| `NCAABB10_TRACE_PHYS=1` | Logs every physical memory allocation and free |
+| `NCAABB10_AUDIO_DUMP=<file.wav>` | Records the 6-channel mix sent to the audio driver |
+| `NCAABB10_GPU_WAIT_SPIN=1` | The game's GPU wait spins, as the SDK does, instead of sleeping |
+| `NCAABB10_INPUT_FILE=<file>` | Follows the file for test input (see Automated testing) |
+| `NCAABB10_TEST_ISO=<iso>` | Starts the disc image setup on that file |
+| `NCAABB10_TEST_IMPORT=<folder>` | Starts **Bring over saves** from that folder |
+| `NCAABB10_TEST_CRASH=1` | Crashes on purpose, to check the crash report |
+
+Each is read only when set, so a normal run is not affected.
 
 ## Performance
 
@@ -303,22 +404,17 @@ and register writes (about 9%). Tried and left off:
 ## Linux
 
 Builds and runs on x86-64 Linux with the Vulkan driver (tested on Ubuntu 24.04 under WSL2). The
-patched SDK and the `vulkan-deps` clones go beside this folder as on Windows; the SDK, with forward
-slashes:
-
-```
-git clone --branch v0.11.0 --recurse-submodules https://github.com/rexglue/rexglue-sdk.git ../rexglue-sdk-src
-for p in patches/rexglue-sdk-0.11.0-*.patch; do git -C ../rexglue-sdk-src apply "$PWD/$p"; done
-```
-
-Then:
+patched SDK and the `vulkan-deps` clones go beside this folder as on Windows:
 
 ```
 tools/fetch_toolchain.sh    # or: sudo apt install clang-20 lld-20 libx11-xcb-dev
-tools/build_vulkan_deps.sh  # Vulkan 1.4.363 headers and loader, VMA (or set VULKAN_SDK)
-tools/build_sdk.sh          # patched SDK into ../rexglue-sdk-src/out/install/linux-amd64
+tools/setup_sdk.sh          # SDK v0.11.0 + patches, Vulkan 1.4.363 headers and loader, VMA; builds them
 ./build_linux.sh            # out/build/linux-amd64-patched/Release/ncaabb10
 ```
+
+`tools/setup_sdk.sh` does what `tools\setup_sdk.cmd` does on Windows and takes the same
+arguments. It builds the Vulkan pieces with `tools/build_vulkan_deps.sh` and the SDK with
+`tools/build_sdk.sh`. `tools/check_tools.sh` says which tool is missing.
 
 - `tools/fetch_toolchain.sh` needs no root: it downloads clang-20, lld-20 and libx11-xcb-dev (about
   31 MB) from the system's own apt archive with `apt-get download`, unpacks them under

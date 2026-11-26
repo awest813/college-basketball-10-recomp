@@ -6,3 +6,4 @@ out/
 *.xex
 *.bin
 *.log
+__pycache__/

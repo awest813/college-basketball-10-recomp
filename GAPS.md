@@ -151,15 +151,17 @@ Worked on 2026-11-25; items 13-16 are done.
       - Reset removes the changed keys from the options file, and Space is A again.
     - The renderer stays in config files, on purpose (see item 8).
 17. **Test hooks ship in the Release exe.**
-    - These are the input-file feed, the virtual controllers, `NCAABB10_TEST_ISO` and
-      `NCAABB10_TEST_IMPORT`.
+    - These are the input-file feed, the virtual controllers, `NCAABB10_TEST_ISO`,
+      `NCAABB10_TEST_IMPORT` and `NCAABB10_TEST_CRASH`.
     - They're inactive unless an environment variable is set, so this is acceptable, but noted.
 
 ## 5. Project upkeep
 
-18. **The work exists only on this disk.**
-    - Neither the project (33 commits) nor the SDK branch `ncaabb10-fixes` has a remote.
-    - One disk failure loses both.
+18. **The work exists only on this disk: mostly done.**
+    - The project is on GitHub.
+    - The SDK branch `ncaabb10-fixes` still has no remote. Its seven patches are in `patches/`,
+      and `tools/setup_sdk.cmd` / `.sh` rebuild the branch's source from them on a clean
+      v0.11.0.
 19. **There's no regression suite or CI.**
     - `drive.ps1`, `to_game.ps1`, `perf_run.ps1` and `make_test_isos.py` are run and judged by
       hand.
@@ -171,6 +173,30 @@ Worked on 2026-11-25; items 13-16 are done.
     - The nightly's boot stall from its critical-section handoff (`1a8d4199`, `ccc231e9`) is
       unreported.
     - Until these land, the port is pinned to SDK 0.11.0.
-21. **The patched SDK builds Release only.** Debug builds have to use the stock SDK, which still
-    has the missing-text, dirty-disc-freeze and dcbz bugs, so a Debug session can't reproduce
-    Release behavior.
+21. **The patched SDK built Release only: done.** `tools/build_sdk.cmd 0 debug` (or
+    `relwithdebinfo`, `all`) builds it in that configuration too, installed beside Release. The
+    patched presets have Debug and RelWithDebInfo builds, so a Debug session runs the same SDK
+    fixes as Release.
+22. **Build and debug audit (2026-11-25).**
+    - **Fixed:**
+      - Setting up the patched SDK took seven `git apply` lines, three Vulkan clones and two
+        build scripts. `tools/setup_sdk.cmd` / `.sh` does all of it and skips what is done.
+        Checked from an empty folder on Windows; on WSL against an already patched copy.
+      - A missing tool, `assets/default.xex`, SDK or SDK configuration gave CMake or compiler
+        errors. The build scripts now stop first with what to do. `tools/check_tools` finds
+        LLVM's default Windows folder and checks for clang 20.
+      - The job count was fixed at 12-14; it is now the processor count.
+      - The log never said which build wrote it. Its first `ncaabb10:` line, and the launcher,
+        now give the version, commit and configuration.
+      - Logs piled up forever (320 files in one test folder). The port keeps 50 MB of old ones.
+      - Crash reports gave only `module+offset`, and a Release build had no PDB.
+        - Release now links `ncaabb10.pdb` (12 MB, about 7 s), and the SDK's Release PDBs are
+          installed.
+        - `tools/symbolize.py` names each frame, down to `sub_<guest address>` for recompiled
+          code.
+        - `tools/package.ps1` writes a symbols zip with each package.
+        - Checked with `NCAABB10_TEST_CRASH`.
+      - A Debug build printed 2675 harmless SIMDe vectorization warnings; now 0.
+      - Visual Studio's vcvars printed a `vswhere.exe` error on every build; hidden.
+    - **Open:** no CI (it could build the SDK, but not the game, which needs `default.xex`).
+      `symbolize.py` is untried on a Linux crash.

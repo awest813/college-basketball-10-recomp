@@ -27,6 +27,7 @@
 
 #include "generated/default/ncaabb10_init.h"
 #include "frontend.h"
+#include "ncaabb10_git.h"  // NCAABB10_GIT, written by the build (cmake/git_rev.cmake)
 
 namespace {
 
@@ -338,6 +339,9 @@ class Ncaabb10App : public rex::app::TitleApp {
         // default is no cache folder, which stores nothing: every run compiled every shader again
         // as it first appeared, with hitches up to 160 ms in the first minutes of a game.
         {"app.cache_root", "{app.root}/cache"},
+        // Each start writes logs/ncaabb10_<run>.log, and the SDK keeps every one by default (a
+        // tester's folder reached 320 files). Keep the newest 50 MB of older runs.
+        {"log.folder_budget", "52428800"},
     };
     for (const Default& d : kDefaults) {
       if (auto set = settings.SetText(rex::SettingLayer::kTitle, d.name, d.value); !set) {
@@ -395,6 +399,9 @@ int GameMain(Ncaabb10App& app, const rex::CLIArgList& args) {
   // Init also succeeds when a shutdown request (Ctrl+C, a signal) ended startup before the modules
   // loaded; then there is no input or UI to use, only Shutdown.
   if (app.Init(args) && !rex::app::IsShutdownRequested()) {
+    // Which build wrote this log: a log someone sends is read against that commit.
+    REXLOG_INFO("ncaabb10: PC port {}, commit {}, {} build of {}", NCAABB10_VERSION, NCAABB10_GIT,
+                NCAABB10_CONFIG, __DATE__);
     std::jthread feed = StartInputFeed(app.GetInput());  // Test scripts drive the launcher too.
     ncaabb10::frontend::InstallUI(app);
     if (ncaabb10::frontend::RunLauncher(app) && app.LaunchTitle()) {

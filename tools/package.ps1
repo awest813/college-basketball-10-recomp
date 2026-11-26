@@ -3,6 +3,9 @@
 # The game files are not included; the launcher sets them up from a disc image on first start.
 # THIRD_PARTY_NOTICES.txt goes in too, gathered by tools/notices.py from the SDK source the
 # build used (-Sdk, the patched SDK checkout by default).
+# Beside the zip it writes <zip name>-symbols.zip with the PDBs of the packed exe and DLLs. Players
+# do not need it; keep it with the build, since tools/symbolize.py needs the PDBs of the exact build
+# that crashed to name the frames of a crash report someone sends.
 #   package.ps1 [-Build win-amd64-patched] [-Config Release] [-Out <zip>] [-Sdk <rexglue-sdk-src>]
 param([string]$Build = "win-amd64-patched", [string]$Config = "Release", [string]$Out = "",
       [string]$Sdk = "")
@@ -17,6 +20,7 @@ foreach ($dll in $runtime) {
   if (-not (Test-Path "$src\$dll")) { throw "$dll missing from $src; rebuild with build_win.cmd" }
 }
 if (-not $Out) { $Out = "$d\out\ncaabb10-windows-x64.zip" }
+$SymbolsOut = [IO.Path]::ChangeExtension($Out, $null).TrimEnd(".") + "-symbols.zip"
 if (-not $Sdk) { $Sdk = Join-Path (Split-Path $d) "rexglue-sdk-src" }
 if (-not (Test-Path "$Sdk\thirdparty\sdl3")) {
   throw "no SDK source with submodules at $Sdk (needed for the license notices); pass -Sdk"
@@ -41,6 +45,18 @@ try {
   $files = (Get-ChildItem $stage -File).Count
   $mb = (Get-Item $Out).Length / 1MB
   "packed $files files into $Out ({0:N1} MB)" -f $mb
+
+  # The PDBs of what went in, for tools/symbolize.py.
+  $pdbs = @(Get-ChildItem $stage -File | Where-Object { $_.Extension -in ".exe", ".dll" } |
+    ForEach-Object { Join-Path $src ($_.BaseName + ".pdb") } | Where-Object { Test-Path $_ })
+  if (-not ($pdbs | Where-Object { $_ -like "*\ncaabb10.pdb" })) {
+    Write-Warning "no ncaabb10.pdb in $src; crash reports from this build cannot be symbolized"
+  }
+  if ($pdbs.Count) {
+    if (Test-Path $SymbolsOut) { Remove-Item $SymbolsOut -Confirm:$false }
+    Compress-Archive -Path $pdbs -DestinationPath $SymbolsOut
+    "packed $($pdbs.Count) PDBs into $SymbolsOut ({0:N1} MB)" -f ((Get-Item $SymbolsOut).Length / 1MB)
+  }
 } finally {
   Remove-Item $stage -Recurse -Force -Confirm:$false
 }

@@ -62,7 +62,7 @@
         {
             "name": "win-amd64-patched",
             "displayName": "Windows AMD64, patched SDK",
-            "description": "Builds against the patched SDK in ../rexglue-sdk-src (Release only, see tools/build_sdk.cmd)",
+            "description": "Builds against the patched SDK in ../rexglue-sdk-src (tools/setup_sdk.cmd; Debug and RelWithDebInfo need tools/build_sdk.cmd 0 debug or relwithdebinfo)",
             "inherits": "win-base",
             "cacheVariables": {
                 "CMAKE_PREFIX_PATH": "${sourceDir}/../rexglue-sdk-src/out/install/win-amd64"
@@ -71,7 +71,7 @@
         {
             "name": "linux-amd64-patched",
             "displayName": "Linux AMD64, patched SDK",
-            "description": "Builds against the patched SDK in ../rexglue-sdk-src (Release only, see tools/build_sdk.sh)",
+            "description": "Builds against the patched SDK in ../rexglue-sdk-src (tools/setup_sdk.sh; Debug and RelWithDebInfo need tools/build_sdk.sh 0 debug or relwithdebinfo)",
             "inherits": "linux-base",
             "cacheVariables": {
                 "CMAKE_PREFIX_PATH": "${sourceDir}/../rexglue-sdk-src/out/install/linux-amd64"
@@ -110,14 +110,34 @@
             "configuration": "RelWithDebInfo"
         },
         {
+            "name": "win-amd64-patched-debug",
+            "configurePreset": "win-amd64-patched",
+            "configuration": "Debug"
+        },
+        {
             "name": "win-amd64-patched-release",
             "configurePreset": "win-amd64-patched",
             "configuration": "Release"
         },
         {
+            "name": "win-amd64-patched-relwithdebinfo",
+            "configurePreset": "win-amd64-patched",
+            "configuration": "RelWithDebInfo"
+        },
+        {
+            "name": "linux-amd64-patched-debug",
+            "configurePreset": "linux-amd64-patched",
+            "configuration": "Debug"
+        },
+        {
             "name": "linux-amd64-patched-release",
             "configurePreset": "linux-amd64-patched",
             "configuration": "Release"
+        },
+        {
+            "name": "linux-amd64-patched-relwithdebinfo",
+            "configurePreset": "linux-amd64-patched",
+            "configuration": "RelWithDebInfo"
         }
     ]
 }

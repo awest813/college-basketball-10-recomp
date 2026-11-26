@@ -187,11 +187,26 @@ bool TracePhysical() {
   }();
   return enabled;
 }
+
+// NCAABB10_TEST_CRASH=1 crashes on the game's first physical allocation, in host code called from
+// recompiled code, so a test can check the crash report and tools/symbolize.py end to end.
+void TestCrash() {
+  static const bool crash = [] {
+    const char* value = std::getenv("NCAABB10_TEST_CRASH");
+    return value && *value && *value != '0';
+  }();
+  if (crash) {
+    REXLOG_WARN("ncaabb10: NCAABB10_TEST_CRASH is set, crashing on purpose");
+    volatile std::uintptr_t address = 8;  // Opaque to the compiler, so the write stays a write.
+    *reinterpret_cast<volatile int*>(address) = 0;
+  }
+}
 }  // namespace
 
 // MmAllocatePhysicalMemoryEx(flags, size, protect, min, max, alignment) -> address.
 REX_HOOK_RAW(__imp__MmAllocatePhysicalMemoryEx) {
   static const Func original = Original("__imp__MmAllocatePhysicalMemoryEx");
+  TestCrash();
   const uint32_t size = ctx.r4.u32, protect = ctx.r5.u32, alignment = ctx.r8.u32;
   const uint32_t caller_lr = ctx.lr;
   CallOriginal(original, ctx, base);
