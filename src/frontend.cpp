@@ -1448,14 +1448,17 @@ PadWatcher g_pad_watcher;
 // ---------------------------------------------------------------------------------------------
 // Size
 //
-// The front end is laid out for a 720p window with the SDK's 10 px pixel font. On a large display
-// (fullscreen at 1440p or 4K) it scales up in whole steps, which keep the pixel font crisp, so it
-// is not a small box in the middle of a TV. Call at the top of each Draw; returns the scale for
+// The front end is laid out for a 720p window with the SDK's 10 px pixel font. On a larger display
+// it scales up in whole steps, which keep the pixel font crisp (2x at 1080p and 1440p, 4x at 4K),
+// so it is not a small box in the middle of a TV. Call at the top of each Draw; returns the scale for
 // the explicit sizes the Draw passes to ImGui.
 float ApplyUiScale(const ImGuiIO& io) {
   static float applied = 0.0f;
   static ImGuiStyle base;
-  const float fit = std::min(io.DisplaySize.y / 600.0f, io.DisplaySize.x / 1000.0f);
+  // 2x from 1080p up: at 1x the launcher was a small box with 10 px text on a 1080p TV. 1000 px
+  // tall, so a maximized window at 1080p (less the taskbar and title bar) gets it too. Options
+  // scrolls its sections when they no longer fit.
+  const float fit = std::min(io.DisplaySize.y / 500.0f, io.DisplaySize.x / 960.0f);
   const float scale = std::clamp(std::floor(fit), 1.0f, 4.0f);
   if (scale != applied) {
     ImGuiStyle& style = ImGui::GetStyle();
@@ -1586,9 +1589,21 @@ class OptionsDialog final : public rex::ui::DialogBase {
   bool Draw(ImGuiIO& io) override {
     FeedGamepads(io);
     const float scale = ApplyUiScale(io);
+    // Centered, as tall as what is open (a size of 0 fits that axis to the contents every frame).
+    // The sections scroll inside it once they would be taller than the display; the buttons
+    // below them stay in view.
     ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
-                            ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(ImVec2(520 * scale, 0), ImGuiCond_Appearing);
+                            ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(std::min(520 * scale, io.DisplaySize.x - 16), 0),
+                             ImGuiCond_Always);
+    // The arrow keys move here and Enter or Space chooses, in game too: the launcher turns
+    // keyboard navigation off when the game starts, where the keys are player 1's controller (the
+    // game gets no input while Options is open). Not with Alt held: Alt+Enter toggles fullscreen.
+    if (io.KeyAlt) {
+      io.ConfigFlags &= ~ImGuiConfigFlags_NavEnableKeyboard;
+    } else {
+      io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    }
     // Esc, or B or Start on a controller, closes Options. B only when it is not backing out of
     // a list or a slider: last frame nothing was open or being changed. Start not with Back held:
     // Back + Start is the shortcut, which closes Options itself.
@@ -1604,12 +1619,27 @@ class OptionsDialog final : public rex::ui::DialogBase {
                    !ImGui::IsKeyDown(ImGuiKey_GamepadBack)) &&
                  !(ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) && !busy_));
     const PadLabels pad = GetPadLabels();
-    if (ImGui::Begin("Options##ncaabb10", &open, ImGuiWindowFlags_NoCollapse)) {
+    if (ImGui::Begin("Options##ncaabb10", &open,
+                     ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoMove)) {
       if (g_in_game) {
         // The title has no pause of its own here: a live game's clock keeps going.
         ImGui::TextDisabled("The game keeps running behind Options; pause it first (%s).",
                             pad.start.c_str());
       }
+      // Room for the sections: the display, less the margins, what is above, and the footer (a
+      // separator, up to two lines of text, the buttons and the controller hint).
+      const ImGuiStyle& style = ImGui::GetStyle();
+      const float footer = style.ItemSpacing.y * 2 + ImGui::GetTextLineHeightWithSpacing() * 3 +
+                           ImGui::GetFrameHeightWithSpacing();
+      const float room = io.DisplaySize.y - 16 * scale - ImGui::GetCursorPosY() - footer -
+                         style.WindowPadding.y;
+      ImGui::SetNextWindowSizeConstraints(ImVec2(0, 0), ImVec2(FLT_MAX, std::max(room, 80 * scale)));
+      // Flattened: the controller and the arrow keys move between the sections and the buttons.
+      ImGui::BeginChild("##sections", ImVec2(0, 0),
+                        ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_NavFlattened);
+      // The window's share for the lists and sliders, as outside the child: a child that sizes
+      // itself starts narrow, and its own default would cut their text short.
+      ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x * 0.65f);
       if (ImGui::CollapsingHeader("Display", ImGuiTreeNodeFlags_DefaultOpen)) {
         Checkbox("Fullscreen (Alt+Enter, F11)", "ui.fullscreen");
         Checkbox("Exclusive fullscreen", "ui.fullscreen_exclusive",
@@ -1743,6 +1773,8 @@ class OptionsDialog final : public rex::ui::DialogBase {
           SetAndSave("ncaabb10.show_launcher", show ? "true" : "false");
         }
       }
+      ImGui::PopItemWidth();
+      ImGui::EndChild();
       ImGui::Separator();
       // Settings marked * that changed while the game ran wait for the next start; say which,
       // and offer that start now.
@@ -1787,8 +1819,9 @@ class OptionsDialog final : public rex::ui::DialogBase {
           }
         }
       }
-      ImGui::TextDisabled("Controller: D-pad or left stick to move, %s to choose, %s to go back "
-                          "or close", pad.choose.c_str(), pad.back.c_str());
+      TextDimWrapped(std::format("Keys: arrows to move, Enter to choose, Esc to close. Controller: "
+                                 "D-pad or left stick, {} to choose, {} to go back or close.",
+                                 pad.choose, pad.back));
     }
     busy_ = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId) || ImGui::IsAnyItemActive() ||
             ImGui::IsKeyDown(ImGuiKey_GamepadFaceRight) || capture_ != nullptr ||
@@ -1798,6 +1831,9 @@ class OptionsDialog final : public rex::ui::DialogBase {
       confirm_ = Confirm::kNone;
       capture_.reset();  // A capture must not outlive the input system.
       capturing_ = -1;
+      if (g_in_game) {
+        io.ConfigFlags &= ~ImGuiConfigFlags_NavEnableKeyboard;  // The keys are the game's again.
+      }
       // Close through the overlay registry rather than by returning false: the registry then
       // releases the input block Options holds (SDK 0.11.0 keeps it after a self-close).
       ui_.ShowOverlay("options", false);

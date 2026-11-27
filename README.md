@@ -66,7 +66,8 @@ controller is a player of its own (up to four); "All controllers are player 1" i
 any of them player 1's. The launcher and Options name the buttons as the first controller labels
 them (Cross and Circle on a PlayStation pad). In Options a controller moves with the D-pad, the
 bottom face button (A, Cross) opens a list or toggles a box, the right one (B, Circle) backs out
-of a list and then closes Options. A button
+of a list and then closes Options. On the keyboard the arrow keys move, Enter or Space chooses
+and Esc closes, in game too. A button
 that opens or closes Options never reaches the game. Windows' Game Bar also opens on the Xbox
 button unless it is turned off in Windows settings; Back + Start avoids it. For a rare controller
 SDL lacks, put the community `gamecontrollerdb.txt` next to the executable (or, when that folder
@@ -112,8 +113,9 @@ the same setting in `ncaabb10.toml`, which F4's "Save to config" writes; `REX_*`
 variables and the command line win over both.
 
 Untick "Show this launcher at startup" to go straight to the game; hold Shift while starting to
-see the launcher again. On a large display (fullscreen at 1440p or 4K) the launcher and Options
-scale up in whole steps, so they stay readable from a couch. The mouse cursor hides after 3
+see the launcher again. From 1080p up (a window at least 1000 pixels tall) the launcher and
+Options scale up in whole steps, 2x at 1080p and 1440p and 4x at 4K, so they stay readable from a
+couch; Options scrolls its sections when they don't fit, with its buttons always in view. The mouse cursor hides after 3
 seconds without moving.
 
 On a computer with two graphics cards (most gaming laptops) the game renders on the faster one,
@@ -221,7 +223,7 @@ an extracted folder.
 
 ## Patched SDK (recommended for Release)
 
-Eight patches fix SDK 0.11.0 bugs that this game hits, or cut its cost:
+Nine patches fix SDK 0.11.0 bugs that this game hits, or cut its cost:
 
 - `patches/rexglue-sdk-0.11.0-texture-watch-race.patch`: the texture cache could stop watching a
   texture the CPU was still filling, leaving the broadcast text (score bar, lineups, rankings)
@@ -254,6 +256,10 @@ Eight patches fix SDK 0.11.0 bugs that this game hits, or cut its cost:
   now fails startup with an error the game puts in words (see First start). A `gpu.d3d12.adapter`
   index that is gone or cannot run it falls back to the first card that can, as a Vulkan device
   index does, instead of not starting.
+- `patches/rexglue-sdk-0.11.0-quiet-read-only-creates.patch`: the game tries to create five
+  `dirinfo` cache files beside its disc files at every boot; the read only game folder refuses
+  them, as the console does. Each was logged as a warning; now at debug level, like the probes
+  above.
 
 `tools\setup_sdk.cmd [jobs] [release|debug|relwithdebinfo|all]` sets them up beside this folder.
 It skips any step that is already done, so after a failure fix the cause and run it again:

@@ -1,0 +1,30 @@
+diff --git a/src/kernel/xboxkrnl/xboxkrnl_io.cpp b/src/kernel/xboxkrnl/xboxkrnl_io.cpp
+index 2a8f7bdf..06d19e9f 100644
+--- a/src/kernel/xboxkrnl/xboxkrnl_io.cpp
++++ b/src/kernel/xboxkrnl/xboxkrnl_io.cpp
+@@ -147,10 +147,16 @@ u32 NtCreateFile_entry(MappedU32 handle_out, u32 desired_access,
+                           : kernel::GetCurrentState().GetFileSystem()->Open(target_path, options);
+   X_STATUS result = X_STATUS_SUCCESS;
+   filesystem::OpenAction file_action = filesystem::OpenAction::kDoesNotExist;
++  // A file the title asks to create in a read only folder that does not have it: titles try to
++  // write caches beside their disc files (they fail on the console too). The file system logs it.
++  bool read_only_create = false;
+   if (opened) {
+     file_action = opened->action;
+   } else {
+     result = ToXStatus(opened.error());
++    read_only_create =
++        filesystem::CodeOf(opened.error()) == filesystem::FileSystemError::kAccessDenied &&
++        opened.error().message.find("on a read only mount") != std::string::npos;
+     if (filesystem::CodeOf(opened.error()) == filesystem::FileSystemError::kExists) {
+       file_action = filesystem::OpenAction::kExists;
+     }
+@@ -182,6 +188,8 @@ u32 NtCreateFile_entry(MappedU32 handle_out, u32 desired_access,
+     // Titles probe for optional files (patches, caches, DLC) as a matter of course; a missing
+     // one is an answer, not a fault, and dozens per load would bury real warnings.
+     REXKRNL_DEBUG("NtCreateFile path='{}' -> {:#x} (not found)", target_path, result);
++  } else if (read_only_create) {
++    REXKRNL_DEBUG("NtCreateFile path='{}' -> {:#x} (not created, read only)", target_path, result);
+   } else if (XFAILED(result)) {
+     REXKRNL_WARN(
+         "NtCreateFile failed "

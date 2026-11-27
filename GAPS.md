@@ -7,7 +7,7 @@ What already holds:
 - A full Play Now game plays to the post-game menu at about 58 fps.
 - Saves, profile and Dynasty load work.
 - Both platforms build with 0 warnings.
-- The eight patch files apply to a clean v0.11.0 and produce exactly the `ncaabb10-fixes`
+- The nine patch files apply to a clean v0.11.0 and produce exactly the `ncaabb10-fixes`
   branch.
 - The working tree is clean.
 
@@ -159,7 +159,7 @@ Worked on 2026-11-25; items 13-16 are done.
 
 18. **The work exists only on this disk: mostly done.**
     - The project is on GitHub.
-    - The SDK branch `ncaabb10-fixes` still has no remote. Its eight patches are in `patches/`,
+    - The SDK branch `ncaabb10-fixes` still has no remote. Its nine patches are in `patches/`,
       and `tools/setup_sdk.cmd` / `.sh` rebuild the branch's source from them on a clean
       v0.11.0.
 19. **There's no regression suite or CI.**
@@ -322,3 +322,30 @@ Worked on 2026-11-25; items 13-16 are done.
       - The SDK's crash dialog is still titled "ReXGlue" (hard-coded in rexbase).
       - The "no card can run the game" box couldn't be shown with the fallback in place (no card
         here fails); it was looked at with an earlier build of the same text.
+
+26. **Third pass: keyboard in Options, 1080p, log noise (2026-11-26).**
+    - **Fixed:**
+      - In game, the arrow keys and Enter did nothing in Options: the launcher turns keyboard
+        navigation off when the game starts (the keys are player 1's controller there). Options
+        now turns it on while it is open and off when it closes. Its footer says which keys do
+        what.
+      - At 1080p the launcher and Options stayed at 1x: a small box with 10 px text on a TV. They
+        now go 2x from a window 1000 pixels tall (1080p fullscreen or maximized), 2x at 1440p and
+        4x at 4K.
+      - Options grew past the display at that size, and at 720p with Keyboard controls open its
+        buttons scrolled out of view. Its sections now scroll in a region of their own, the
+        window follows what is open, and the buttons and hint stay in view.
+      - Every boot logged five warnings for `dirinfo` files the game tries to create in the read
+        only game folder (as on the console). New SDK patch (`quiet-read-only-creates`): debug
+        level. A boot into the game now logs one warning (an unimplemented Xbox Live call).
+    - **Checked (Windows):**
+      - In game, Down three times in Options moved the focus to Aspect ratio; Esc closed it.
+      - A 1920x1080 window (1061 tall inside the screen): the launcher and Options at 2x, Options
+        scrolling with its buttons in view. Down 26 times with the test controller went through
+        the scrolled sections to Close.
+      - 720p: as before, the hint wrapped to two lines.
+      - The nine patches apply to a clean v0.11.0 and give exactly the `ncaabb10-fixes` branch.
+      - Windows and Linux build with 0 warnings (SDK and game).
+    - **Open:**
+      - The disc setup progress and saves import screens were not looked at at 2x.
+      - 4x at 4K was not looked at (no 4K display here).
