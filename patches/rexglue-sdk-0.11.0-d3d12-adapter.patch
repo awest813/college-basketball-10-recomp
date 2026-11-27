@@ -1,0 +1,63 @@
+diff --git a/src/gpu/xenos/host/d3d12/d3d12_provider.cpp b/src/gpu/xenos/host/d3d12/d3d12_provider.cpp
+index d834fe72..dbd33eb2 100644
+--- a/src/gpu/xenos/host/d3d12/d3d12_provider.cpp
++++ b/src/gpu/xenos/host/d3d12/d3d12_provider.cpp
+@@ -36,11 +36,12 @@ std::unique_ptr<D3D12Provider> D3D12Provider::Create(i32 adapter_index,
+   auto provider = std::make_unique<D3D12Provider>(Key{});
+   provider->settings_ = &settings;
+   if (!provider->Initialize(adapter_index)) {
+-    REXGPU_FATAL(
+-        "Unable to initialize Direct3D 12 graphics subsystem.\n"
+-        "\n"
+-        "Install the latest drivers for your GPU, which must support "
+-        "Direct3D 12 with the feature level of at least 11_0.");
++    // No provider is an error the caller reports (SetSurface: "Unable to create graphics
++    // provider"), as the Vulkan provider does; a fatal error here aborted the process.
++    REXGPU_ERROR(
++        "Unable to initialize Direct3D 12 graphics subsystem. Install the latest drivers for your "
++        "GPU, which must support Direct3D 12 with the feature level of at least 11_0.");
++    return nullptr;
+   }
+   return provider;
+ }
+@@ -246,6 +247,26 @@ bool D3D12Provider::Initialize(i32 adapter_index_wanted) {
+     adapter = nullptr;
+     ++adapter_index;
+   }
++  // A configured adapter that is gone (an external card unplugged, adapters listed in another
++  // order) or cannot run feature level 11_0: take the first hardware adapter that can, as the
++  // Vulkan provider does for a device index, rather than not starting.
++  if (adapter == nullptr && adapter_index_wanted >= 0) {
++    REXUI_WARN("Adapter {} cannot run Direct3D 12 at feature level 11_0 or is not there; using the "
++               "first hardware adapter that can",
++               adapter_index_wanted);
++    for (adapter_index = 0; dxgi_factory->EnumAdapters1(adapter_index, &adapter) == S_OK;
++         ++adapter_index) {
++      DXGI_ADAPTER_DESC1 adapter_desc;
++      if (SUCCEEDED(adapter->GetDesc1(&adapter_desc)) &&
++          !(adapter_desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) &&
++          SUCCEEDED(pfn_d3d12_create_device_(adapter, D3D_FEATURE_LEVEL_11_0,
++                                             _uuidof(ID3D12Device), nullptr))) {
++        break;
++      }
++      adapter->Release();
++      adapter = nullptr;
++    }
++  }
+   if (adapter == nullptr) {
+     REXUI_ERROR(
+         "Failed to get an adapter supporting Direct3D 12 with the feature "
+diff --git a/src/gpu/xenos/xenos_graphics_driver_base.cpp b/src/gpu/xenos/xenos_graphics_driver_base.cpp
+index 6fe403e1..fc4dffc5 100644
+--- a/src/gpu/xenos/xenos_graphics_driver_base.cpp
++++ b/src/gpu/xenos/xenos_graphics_driver_base.cpp
+@@ -144,6 +144,9 @@ Result<void> XenosGraphicsDriverBase::AttachTitle(const TitleInfo& info, IPhysic
+ 
+   if (!provider_) {
+     CreateProvider(false);
++    if (!provider_) {
++      return Err(ErrorCategory::kRuntime, "Unable to create graphics provider");
++    }
+   }
+ 
+   command_processor_ = CreateCommandProcessor();

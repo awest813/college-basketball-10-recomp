@@ -12,12 +12,14 @@
 #include <rex/platform/file.h>
 #include <rex/setting.h>
 #include <rex/settings_registry.h>
+#include <rex/string/text.h>
 
 #include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <memory>
 #include <sstream>
@@ -385,6 +387,50 @@ class Ncaabb10App : public rex::app::TitleApp {
       }
     }
     return rex::Ok();
+  }
+
+  // Sound is not required: when the audio system cannot start (the Windows Audio service off, no
+  // sound server on Linux) the SDK ran no audio driver and refused to start ("no audio driver is
+  // available"). Without one it keeps the game's audio clock itself and the game runs silent; the
+  // front end says so. A missing output device was already fine: the SDK retries it.
+  rex::AppSysRequirements GetRequirements() const override {
+    rex::AppSysRequirements needs = TitleApp::GetRequirements();
+    needs.audio = false;
+    return needs;
+  }
+
+  // A startup failure in the player's words, in a box with the game's name: the SDK's box is
+  // titled "ReXGlue" and says "modules failed: module 'rexgpu' failed to init, ...". Errors once
+  // the app runs keep the SDK's handling (a message in the game window).
+  void ReportError(std::string_view message) override {
+    const rex::app::AppPhase phase = GetPhase();
+    if (phase != rex::app::AppPhase::kStart && phase != rex::app::AppPhase::kProviders) {
+      TitleApp::ReportError(message);
+      return;
+    }
+    App::ReportError(message);  // The log.
+    if (IsHeadlessRequested()) {
+      return;
+    }
+    std::string text;
+    if (message.find("graphics provider") != std::string_view::npos) {
+#if defined(_WIN32)
+      text = "No graphics card on this computer can run the game: it needs one that supports "
+             "Direct3D 12 (feature level 11_0).";
+#else
+      text = "No graphics card on this computer can run the game: it needs one with a Vulkan "
+             "driver.";
+#endif
+      text += "\n\nInstalling the latest driver from the card's maker (NVIDIA, AMD or Intel) "
+              "usually fixes this.";
+    } else {
+      text = "The game could not start.";
+    }
+    std::error_code ec;
+    const std::filesystem::path logs = std::filesystem::absolute(log_root.Get(), ec);
+    text += std::format("\n\nDetails: {}\n\nThe log is in {}", message,
+                        rex::string::PathToUTF8(logs.lexically_normal()));
+    SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "NCAA Basketball 10", text.c_str(), nullptr);
   }
 
   rex::Result<void> OnTitleLaunch(rex::kernel::TitleRuntime& title) override {

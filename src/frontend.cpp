@@ -36,6 +36,7 @@
 #include <rex/app/app.h>
 #include <rex/app/title_app.h>
 #include <rex/bit.h>
+#include <rex/apu/audio_system.h>
 #include <rex/gpu/graphics_system.h>
 #include <rex/hid/binding.h>
 #include <rex/hid/input_system.h>
@@ -50,6 +51,7 @@
 #include <rex/ui/ui_system.h>
 
 #include <SDL3/SDL_gamepad.h>
+#include <SDL3/SDL_init.h>
 #include <SDL3/SDL_stdinc.h>
 
 #if defined(_WIN32)
@@ -77,9 +79,12 @@ class FrontendSettings final : public rex::SettingOwner {
   FrontendSettings() : SettingOwner("ncaabb10") {}
   REX_SETTING(bool, show_launcher, true,
               "Show the launcher at startup; hold Shift while starting to show it anyway");
+  // Read before the config file and the command line load (ChooseGraphicsCard runs from
+  // OnConfigure), so only Options sets it; F4's "Save to config" leaves it out.
   REX_SETTING(std::string, graphics_card, "",
-              "The graphics card to render on, by its name; empty takes the fastest one",
-              rex::kStartupOnly);
+              "The graphics card to render on, by its name, as Options sets it; empty takes the "
+              "fastest one",
+              rex::kStartupOnly, rex::kNoSave);
   REX_SETTING(bool, show_fps, false, "Show the frame rate in the top right corner");
 };
 
@@ -95,6 +100,8 @@ rex::gpu::IGraphicsSystem* g_graphics = nullptr;  // Set by InstallUI; the frame
 // Past the launcher: the title runs (or is about to). Options then offers Quit game, and a restart
 // goes straight back into the game. The controller watcher thread reads it too.
 std::atomic<bool> g_in_game = false;
+// The card name this run renders on as Options chose it (ChooseGraphicsCard), empty for automatic.
+std::string g_graphics_card_at_start;
 // Set for the new process by a restart from a running game, so it skips the launcher once.
 constexpr char kSkipLauncherVariable[] = "NCAABB10_SKIP_LAUNCHER";
 
@@ -1218,9 +1225,9 @@ void AddHud() {
   }
 }
 
-void ShowNotice(std::string text) {
+void ShowNotice(std::string text, std::chrono::seconds duration = std::chrono::seconds(4)) {
   REXLOG_INFO("ncaabb10: notice: {}", text);
-  g_notices.push_back({std::move(text), std::chrono::steady_clock::now() + std::chrono::seconds(4)});
+  g_notices.push_back({std::move(text), std::chrono::steady_clock::now() + duration});
   if (g_notices.size() > 3) {
     g_notices.erase(g_notices.begin());
   }
@@ -1371,9 +1378,9 @@ class PadWatcher {
       }
       if (++pad.seen >= 2 && !pad.announced) {
         pad.announced = true;
-        const int player = SDL_GetGamepadPlayerIndexForID(id);
+        const int player = shared_ ? -1 : PlayerOf(id);
         std::string text = "Controller connected: " + pad.name;
-        if (player >= 0 && player < 4 && !shared_) {
+        if (player >= 0) {
           text += std::format(" (player {})", player + 1);
         }
         Post(ui, std::move(text));
@@ -1399,6 +1406,30 @@ class PadWatcher {
       it = pads_.erase(it);
     }
     first_ = false;
+  }
+
+  // The player (0 to 3) the input system gave a pad, or -1 when that can't be told. It assigns
+  // players its own way (an XInput pad keeps its slot only while that is free), so SDL's player
+  // number can differ; the input system names the make of each player's pad. With two of the
+  // same make, SDL's number decides if it is one of theirs.
+  static int PlayerOf(SDL_JoystickID id) {
+    if (!g_input) {
+      return -1;
+    }
+    const Uint16 vendor = SDL_GetGamepadVendorForID(id);
+    const Uint16 product = SDL_GetGamepadProductForID(id);
+    std::vector<int> players;
+    for (uint32_t user = 0; user < 4; ++user) {
+      const auto info = g_input->GetPadInfo(user);
+      if (info && info->vendor == vendor && info->product == product) {
+        players.push_back(static_cast<int>(user));
+      }
+    }
+    if (players.size() == 1) {
+      return players[0];
+    }
+    const int sdl = SDL_GetGamepadPlayerIndexForID(id);
+    return std::ranges::find(players, sdl) != players.end() ? sdl : -1;
   }
 
   void Post(rex::ui::IUISystem& ui, std::string text) {
@@ -1890,11 +1921,14 @@ class OptionsDialog final : public rex::ui::DialogBase {
     if (!listed || list.cards.empty()) {
       return;
     }
-    // The renderer's setting holds the card this run started on (-1: the renderer chose).
+    // The renderer's setting holds the card this run started on. At -1 the renderer chose: on
+    // Direct3D 12 the first card listed (ChooseGraphicsCard leaves it at -1 when that is the
+    // fastest), on Vulkan by the features it wants.
     const std::string running = GetText(list.setting);
     const char* in_use = "the one the renderer chose";
     for (const GraphicsCard& card : list.cards) {
-      if (std::to_string(card.index) == running) {
+      if (std::to_string(card.index) == running ||
+          (running == "-1" && list.preferred == 0 && &card == &list.cards[0])) {
         in_use = card.name.c_str();
       }
     }
@@ -1912,15 +1946,23 @@ class OptionsDialog final : public rex::ui::DialogBase {
     for (const std::string& label : labels) {
       items.push_back(label.c_str());
     }
-    const std::string chosen = GetShown("ncaabb10.graphics_card");
+    // The choice for the next start, else the one this run started with. Two cards of the same
+    // make share a name; the first one is the one ChooseGraphicsCard takes.
+    const auto next = g_next_start.find("ncaabb10.graphics_card");
+    const std::string chosen = next != g_next_start.end() ? next->second : g_graphics_card_at_start;
     int index = 0;
-    for (size_t i = 0; i < list.cards.size(); ++i) {
-      if (!chosen.empty() && list.cards[i].name == chosen) {
+    for (size_t i = 0; i < list.cards.size() && !chosen.empty(); ++i) {
+      if (list.cards[i].name == chosen) {
         index = static_cast<int>(i) + 1;
+        break;
       }
     }
     if (ImGui::Combo("Graphics card *", &index, items.data(), static_cast<int>(items.size()))) {
-      SetAndSave("ncaabb10.graphics_card", index == 0 ? "" : list.cards[index - 1].name);
+      const std::string name = index == 0 ? "" : list.cards[index - 1].name;
+      SetAndSave("ncaabb10.graphics_card", name);
+      if (name == g_graphics_card_at_start) {
+        g_next_start.erase("ncaabb10.graphics_card");  // What this run uses: no restart needed.
+      }
     }
     ImGui::SetItemTooltip("In use: %s (%s).\nAutomatic takes the fastest card: on a laptop, the "
                           "dedicated one\nrather than the one built into the processor.",
@@ -2801,8 +2843,13 @@ void UseFolderThisSession(const fs::path& folder) {
 
 // Hands the renderer the card to use, before it starts: the one the player chose in Options (kept
 // by name, which stays right when cards are added or the system lists them in another order), else
-// the fastest. At the title layer, so gpu.d3d12.adapter or gpu.vulkan.device in the config file or
-// on the command line still wins.
+// the fastest.
+// - A choice from Options goes in at the options file's layer, above the config file: F4's "Save
+//   to config" writes every setting that differs from its default, so an index saved there once
+//   must not undo a later choice. The command line still wins.
+// - The fastest card goes in at the title layer, and only when the renderer would not take it
+//   anyway (its first usable card), so on most computers the setting stays at its default and is
+//   never saved. An index saved before still falls back if that card goes (patched SDK).
 void ChooseGraphicsCard(rex::SettingsRegistry& settings) {
   const GraphicsCards& list = ListGraphicsCards();
   int pick = list.preferred;
@@ -2820,12 +2867,17 @@ void ChooseGraphicsCard(rex::SettingsRegistry& settings) {
       chosen = true;
     }
   }
+  g_graphics_card_at_start = chosen ? wanted : "";
   if (pick < 0) {
     return;
   }
   const GraphicsCard& card = list.cards[static_cast<size_t>(pick)];
-  if (auto set = settings.SetText(rex::SettingLayer::kTitle, list.setting, std::to_string(card.index));
-      !set) {
+  if (!chosen && pick == 0) {
+    REXLOG_INFO("ncaabb10: graphics card {} (the fastest, the renderer's own pick)", card.name);
+    return;
+  }
+  const rex::SettingLayer layer = chosen ? rex::SettingLayer::kEnvironment : rex::SettingLayer::kTitle;
+  if (auto set = settings.SetText(layer, list.setting, std::to_string(card.index)); !set) {
     REXLOG_WARN("ncaabb10: could not set {}: {}", list.setting, set.error().GetDescription());
     return;
   }
@@ -2896,6 +2948,13 @@ void InstallUI(rex::app::TitleApp& app) {
   g_pad_watcher.Start(ui);
   if (Settings().show_fps.Get()) {
     AddHud();
+  }
+  // The game starts without sound when the audio system does not (main.cpp, GetRequirements); say
+  // so rather than leave the player wondering. A device that is merely missing (no speakers) is
+  // retried by the SDK and needs no word here.
+  if (app.GetAudio().GetSettings().driver.Get() != "none" && SDL_WasInit(SDL_INIT_AUDIO) == 0) {
+    ShowNotice("No sound: the computer's audio system did not start (details in the log).",
+               std::chrono::seconds(10));
   }
 }
 

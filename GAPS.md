@@ -7,7 +7,7 @@ What already holds:
 - A full Play Now game plays to the post-game menu at about 58 fps.
 - Saves, profile and Dynasty load work.
 - Both platforms build with 0 warnings.
-- The seven patch files apply to a clean v0.11.0 and produce exactly the `ncaabb10-fixes`
+- The eight patch files apply to a clean v0.11.0 and produce exactly the `ncaabb10-fixes`
   branch.
 - The working tree is clean.
 
@@ -159,7 +159,7 @@ Worked on 2026-11-25; items 13-16 are done.
 
 18. **The work exists only on this disk: mostly done.**
     - The project is on GitHub.
-    - The SDK branch `ncaabb10-fixes` still has no remote. Its seven patches are in `patches/`,
+    - The SDK branch `ncaabb10-fixes` still has no remote. Its eight patches are in `patches/`,
       and `tools/setup_sdk.cmd` / `.sh` rebuild the branch's source from them on a clean
       v0.11.0.
 19. **There's no regression suite or CI.**
@@ -284,3 +284,41 @@ Worked on 2026-11-25; items 13-16 are done.
       - No laptop was tried; Vulkan on a Linux PC with two cards is untested.
       - The SDK names Vulkan's setting `Config::gpu.vulkan_device` in its log; it is
         `gpu.vulkan.device`.
+
+25. **Second pass: review of item 24, startup failures (2026-11-26).** An independent review read
+    the item 24 commit; its findings were checked against the SDK and fixed.
+    - **Fixed:**
+      - The fastest card went in at the title layer on every start, so one F4 "Save to config"
+        wrote its index into `ncaabb10.toml`, where it beat any later choice in Options and, if
+        that card went, kept the game from starting. A choice from Options now goes in above
+        the config file, and the fastest card is set only when the renderer would not take it
+        anyway (on this PC it is left at its default).
+      - `ncaabb10.graphics_card` is read before the config file and the command line load, so it
+        is now left out of F4's save and Options shows the choice the run actually used.
+      - The "Controller connected (player N)" notice took N from SDL, which numbers pads its own
+        way; it now asks the input system, which assigns the players.
+      - With no card that runs Direct3D 12 the SDK aborted, and the player got a crash report
+        ("ReXGlue", SIGABRT). New SDK patch (`d3d12-adapter`): the provider fails like the Vulkan
+        one does, and a `gpu.d3d12.adapter` index that is gone falls back to a card that works.
+      - A failed start showed the SDK's box, titled "ReXGlue", in developer words ("modules
+        failed: module 'rexgpu' failed to init, ..."). The game now shows its own box, titled
+        "NCAA Basketball 10", saying what is wrong, what usually fixes it, and where the log is.
+      - When the audio system can't start (Windows Audio service off, no sound server) the game
+        refused to start ("no audio driver is available"). It now runs silent, and a notice says
+        so for 10 s.
+    - **Checked (Windows):**
+      - `--gpu.d3d12.adapter=9`: before the patch, the abort and the "ReXGlue" crash dialog; with
+        the patch and the in-between build, the new box (looked at); with the fallback, the game
+        starts on the A750 and logs the fallback.
+      - `adapter = 0` in `ncaabb10.toml` with the UHD 770 chosen in Options: the game ran on the
+        UHD 770.
+      - `SDL_AUDIO_DRIVER=nosuchdriver`: the launcher showed the notice, and the game ran past the
+        intro with no sound.
+      - A second test controller: "Controller connected: Test controller (player 2)".
+      - The eight patches apply to a clean v0.11.0 and give exactly the `ncaabb10-fixes` branch.
+      - Windows and Linux build with 0 warnings. A system header update had left the Linux
+        precompiled header stale; it was rebuilt.
+    - **Open:**
+      - The SDK's crash dialog is still titled "ReXGlue" (hard-coded in rexbase).
+      - The "no card can run the game" box couldn't be shown with the fallback in place (no card
+        here fails); it was looked at with an earlier build of the same text.

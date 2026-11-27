@@ -150,6 +150,12 @@ The exe is not code signed, so Windows SmartScreen may say it protected your PC 
 unrecognized app; **More info**, then **Run anyway**, starts it. The exe carries the port's version
 (Properties > Details, and the line under the title in the launcher).
 
+If the game cannot start, a box titled "NCAA Basketball 10" says why and where the log is. With
+no graphics card that runs Direct3D 12 (feature level 11_0) it says so; the card maker's latest
+driver usually fixes that. When the computer's audio system does not start, the game runs without
+sound and says so for a few seconds; with no speakers or headset plugged in it keeps trying, and
+sound starts when one is.
+
 ## Building on Windows
 
 Needs:
@@ -215,7 +221,7 @@ an extracted folder.
 
 ## Patched SDK (recommended for Release)
 
-Seven patches fix SDK 0.11.0 bugs that this game hits, or cut its cost:
+Eight patches fix SDK 0.11.0 bugs that this game hits, or cut its cost:
 
 - `patches/rexglue-sdk-0.11.0-texture-watch-race.patch`: the texture cache could stop watching a
   texture the CPU was still filling, leaving the broadcast text (score bar, lineups, rankings)
@@ -243,6 +249,11 @@ Seven patches fix SDK 0.11.0 bugs that this game hits, or cut its cost:
   close log at debug level too instead of as an error and a warning, and a missing file the game
   asks to create in a read only disc folder is refused (as before) without first a warning that
   it opens for read. Nothing the game gets back changes.
+- `patches/rexglue-sdk-0.11.0-d3d12-adapter.patch`: with no graphics card that runs Direct3D 12
+  at feature level 11_0, the renderer aborted the process, so the player got a crash report. It
+  now fails startup with an error the game puts in words (see First start). A `gpu.d3d12.adapter`
+  index that is gone or cannot run it falls back to the first card that can, as a Vulkan device
+  index does, instead of not starting.
 
 `tools\setup_sdk.cmd [jobs] [release|debug|relwithdebinfo|all]` sets them up beside this folder.
 It skips any step that is already done, so after a failure fix the cause and run it again:
