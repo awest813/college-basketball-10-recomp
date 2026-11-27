@@ -60,8 +60,13 @@ python -I tools/xiso.py extract "NCAA Basketball 10 (USA).iso" assets
 | F4 | | All SDK settings | All SDK settings |
 
 Any XInput, PlayStation, Switch Pro or other controller SDL knows works, and can be plugged in at
-any time; the launcher and Options name the connected ones. In Options a controller moves with the
-D-pad, A opens a list or toggles a box, B backs out of a list and then closes Options. A button
+any time; the launcher names the connected ones, Options says which player each one is, and in
+game a short notice says when one connects or disconnects or its battery runs low (10%). Each
+controller is a player of its own (up to four); "All controllers are player 1" in Options makes
+any of them player 1's. The launcher and Options name the buttons as the first controller labels
+them (Cross and Circle on a PlayStation pad). In Options a controller moves with the D-pad, the
+bottom face button (A, Cross) opens a list or toggles a box, the right one (B, Circle) backs out
+of a list and then closes Options. A button
 that opens or closes Options never reaches the game. Windows' Game Bar also opens on the Xbox
 button unless it is turned off in Windows settings; Back + Start avoids it. For a rare controller
 SDL lacks, put the community `gamecontrollerdb.txt` next to the executable (or, when that folder
@@ -85,10 +90,13 @@ The keyboard is also player 1's controller, alongside any pad (Options, "Keyboar
 | F, K | Left, right stick press |
 
 Options (F1) has:
-- **Display:** fullscreen, aspect ratio, render resolution, anti-aliasing (FXAA).
-- **Graphics:** texture filtering, vsync, render path.
+- **Display:** fullscreen, aspect ratio, render resolution, anti-aliasing (FXAA), and a frame rate
+  counter for the top right corner.
+- **Graphics:** the graphics card (when the computer has more than one), texture filtering, vsync,
+  render path.
 - **Audio:** volume, mute.
-- **Controls:** keyboard as controller, vibration and stick deadzones. Under **Keyboard
+- **Controls:** which controller is which player, keyboard as controller, vibration (**Test**
+  rumbles every controller), all controllers as player 1, and stick deadzones. Under **Keyboard
   controls**, each pad input's key: **Change**, then press the new key (hold Esc to cancel);
   **Reset all keys** goes back to the table above.
 - **Profile:** the player name the game shows on its menus and save screens (patched SDK).
@@ -107,6 +115,13 @@ Untick "Show this launcher at startup" to go straight to the game; hold Shift wh
 see the launcher again. On a large display (fullscreen at 1440p or 4K) the launcher and Options
 scale up in whole steps, so they stay readable from a couch. The mouse cursor hides after 3
 seconds without moving.
+
+On a computer with two graphics cards (most gaming laptops) the game renders on the faster one,
+the dedicated card, where the SDK alone would take the first one the system lists, usually the
+one built into the processor. Options, Graphics card, picks another; the choice is kept by the
+card's name, and a card that is gone or cannot run Direct3D 12 falls back to the fastest. The log
+lists the cards at startup. `--gpu.d3d12.adapter=<n>` (Windows) or `--gpu.vulkan.device=<n>`
+(Linux) on the command line still overrides it.
 
 ### Saves
 

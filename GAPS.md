@@ -240,3 +240,47 @@ Worked on 2026-11-25; items 13-16 are done.
     - **Open:**
       - Options can't pause the game: the SDK has no pause for the title's threads.
       - The launcher's Esc quits at once, without asking. Nothing is lost there.
+
+24. **Controllers and graphics cards (2026-11-26).**
+    - **Fixed (graphics cards):**
+      - The SDK renders on the first hardware adapter Windows lists (Direct3D 12), or on the
+        first Vulkan device with the features it wants. On a laptop that is usually the card
+        built into the processor. The game now lists the cards before the renderer starts and
+        hands it the high-performance one (`src/graphics_cards.cpp`): DXGI's high-performance
+        order on Windows, the first dedicated Vulkan device elsewhere. Only that card is probed
+        for Direct3D 12, so startup costs about 40 ms more (three warm runs each way: 719-725 ms
+        against 754-786 ms to the Direct3D device).
+      - Options has **Graphics card** when there is more than one, with the card in use in its
+        tooltip. The choice is kept by name, so a card added later or a new listing order
+        doesn't move it. A card that is gone or cannot run Direct3D 12 falls back to the fastest.
+    - **Fixed (controllers):**
+      - Options lists which controller is which player (as the input system assigned them, by
+        make), plus the keyboard on player 1.
+      - In game, a notice for a controller connecting (with its player) or disconnecting, and
+        one for a battery at 10% or less.
+      - Options and the launcher name the buttons as the first controller labels them: Cross
+        and Circle, Options and Create on a PS5 pad; +, - and Home on a Nintendo pad.
+      - **Test** next to Vibration rumbles every controller.
+      - **All controllers are player 1** (`hid.shared_pads`, after a restart).
+      - Options has a frame rate counter (fps and frame time, top right, in game).
+      - Choosing the value a restart-bound setting started with clears it from "Restart to
+        apply" again.
+    - **Checked (Windows, Arc A750 + UHD 770):**
+      - Automatic took the A750. Graphics card set to the UHD 770 by controller: "Restart to
+        apply: Graphics card", and the next start rendered on the UHD 770 (log: DXGI adapter
+        UHD 770).
+      - A card name that isn't there fell back to the A750, with a warning in the log.
+      - A second test controller plugged in during the intro: "Controller connected: Test
+        controller (player 2)". Options listed players 1 and 2. Unplugged: "Controller
+        disconnected".
+      - Test rumbled the test controller (log: rumble 40960, then 0 after 400 ms).
+      - The counter read 61 fps / 16.5 ms. With it showing, ImGui wants the keyboard for one
+        frame as the launcher closes, then never in game, also after Options opened and closed.
+      - Linux builds with 0 warnings. Under WSL (llvmpipe only) the Vulkan listing skipped the
+        CPU device and left the choice to the SDK; the launcher ran.
+    - **Open:**
+      - No real controllers were tried: PlayStation and Nintendo names, battery and player
+        lights are untested.
+      - No laptop was tried; Vulkan on a Linux PC with two cards is untested.
+      - The SDK names Vulkan's setting `Config::gpu.vulkan_device` in its log; it is
+        `gpu.vulkan.device`.

@@ -2,6 +2,7 @@
 // toggle (Alt+Enter or F11). Settings changed here apply at once and are saved to the config file.
 
 #include "frontend.h"
+#include "graphics_cards.h"
 #include "ncaabb10_git.h"  // NCAABB10_GIT, written by the build (cmake/git_rev.cmake)
 
 #include <algorithm>
@@ -35,6 +36,7 @@
 #include <rex/app/app.h>
 #include <rex/app/title_app.h>
 #include <rex/bit.h>
+#include <rex/gpu/graphics_system.h>
 #include <rex/hid/binding.h>
 #include <rex/hid/input_system.h>
 #include <rex/input_keys.h>
@@ -75,6 +77,10 @@ class FrontendSettings final : public rex::SettingOwner {
   FrontendSettings() : SettingOwner("ncaabb10") {}
   REX_SETTING(bool, show_launcher, true,
               "Show the launcher at startup; hold Shift while starting to show it anyway");
+  REX_SETTING(std::string, graphics_card, "",
+              "The graphics card to render on, by its name; empty takes the fastest one",
+              rex::kStartupOnly);
+  REX_SETTING(bool, show_fps, false, "Show the frame rate in the top right corner");
 };
 
 FrontendSettings& Settings() {
@@ -84,9 +90,11 @@ FrontendSettings& Settings() {
 
 rex::SettingsRegistry* g_registry = nullptr;
 rex::hid::IInputSystem* g_input = nullptr;  // Set by InstallUI; the key binding editor uses it.
+rex::ui::IUISystem* g_ui = nullptr;            // Set by InstallUI.
+rex::gpu::IGraphicsSystem* g_graphics = nullptr;  // Set by InstallUI; the frame rate counter.
 // Past the launcher: the title runs (or is about to). Options then offers Quit game, and a restart
-// goes straight back into the game.
-bool g_in_game = false;
+// goes straight back into the game. The controller watcher thread reads it too.
+std::atomic<bool> g_in_game = false;
 // Set for the new process by a restart from a running game, so it skips the launcher once.
 constexpr char kSkipLauncherVariable[] = "NCAABB10_SKIP_LAUNCHER";
 
@@ -329,7 +337,12 @@ void SetAndSave(std::string_view name, std::string_view text) {
   auto found = g_registry->Find(name);
   if (found && (*found)->IsFrozen() && (*found)->Check(text)) {
     REXLOG_INFO("ncaabb10: option {} = {} (on the next start)", name, text);
-    g_next_start[std::string(name)] = std::string(text);
+    // Back to the value this run started with: nothing waits for a restart.
+    if (text == GetText(name)) {
+      g_next_start.erase(std::string(name));
+    } else {
+      g_next_start[std::string(name)] = std::string(text);
+    }
     g_user_values[std::string(name)] = TomlValue(name, text);
     Save();
     return;
@@ -375,6 +388,8 @@ std::string PendingLabels() {
       {"gpu.d3d12.render_target_path", "Render path"},
       {"gpu.vulkan.render_target_path", "Render path"},
       {"kernel.gamertag", "Player name"},
+      {"ncaabb10.graphics_card", "Graphics card"},
+      {"hid.shared_pads", "All controllers are player 1"},
   };
   // Changes Options holds back (settings fixed for this run), and kRestart settings, which take a
   // change at once but use it only from the next start (the registry tracks those, also when F4
@@ -1032,6 +1047,186 @@ std::string GamepadNames() {
   return names;
 }
 
+// What the buttons the menus name are called on the controller in hand (the first one connected):
+// the bottom face button chooses and the right one goes back, Cross and Circle on a PlayStation
+// pad, B and A on a Nintendo one. The pixel font has ASCII only.
+struct PadLabels {
+  std::string choose = "A", back = "B", start = "Start", select = "Back", guide = "Guide";
+};
+
+const char* FaceLabel(SDL_GamepadButtonLabel label, const char* fallback) {
+  switch (label) {
+    case SDL_GAMEPAD_BUTTON_LABEL_A: return "A";
+    case SDL_GAMEPAD_BUTTON_LABEL_B: return "B";
+    case SDL_GAMEPAD_BUTTON_LABEL_X: return "X";
+    case SDL_GAMEPAD_BUTTON_LABEL_Y: return "Y";
+    case SDL_GAMEPAD_BUTTON_LABEL_CROSS: return "Cross";
+    case SDL_GAMEPAD_BUTTON_LABEL_CIRCLE: return "Circle";
+    case SDL_GAMEPAD_BUTTON_LABEL_SQUARE: return "Square";
+    case SDL_GAMEPAD_BUTTON_LABEL_TRIANGLE: return "Triangle";
+    default: return fallback;
+  }
+}
+
+PadLabels GetPadLabels() {
+  PadLabels labels;
+  SDL_Gamepad* first = nullptr;
+  ForEachGamepad([&](SDL_Gamepad* pad) { first = first ? first : pad; });
+  if (!first) {
+    return labels;
+  }
+  labels.choose = FaceLabel(SDL_GetGamepadButtonLabel(first, SDL_GAMEPAD_BUTTON_SOUTH), "A");
+  labels.back = FaceLabel(SDL_GetGamepadButtonLabel(first, SDL_GAMEPAD_BUTTON_EAST), "B");
+  switch (SDL_GetGamepadType(first)) {
+    case SDL_GAMEPAD_TYPE_XBOXONE:  // Xbox One and Series pads.
+      labels.start = "Menu";
+      labels.select = "View";
+      labels.guide = "Xbox button";
+      break;
+    case SDL_GAMEPAD_TYPE_PS3:
+      labels.select = "Select";
+      labels.guide = "PS button";
+      break;
+    case SDL_GAMEPAD_TYPE_PS4:
+      labels.start = "Options";
+      labels.select = "Share";
+      labels.guide = "PS button";
+      break;
+    case SDL_GAMEPAD_TYPE_PS5:
+      labels.start = "Options";
+      labels.select = "Create";
+      labels.guide = "PS button";
+      break;
+    case SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_PRO:
+    case SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_LEFT:
+    case SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_RIGHT:
+    case SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_PAIR:
+      labels.start = "+";
+      labels.select = "-";
+      labels.guide = "Home";
+      break;
+    default:
+      break;
+  }
+  return labels;
+}
+
+// Rumbles every controller briefly, so the player feels whether vibration works and which pad is
+// which.
+void TestVibration() {
+  ForEachGamepad([](SDL_Gamepad* pad) {
+    if (!SDL_RumbleGamepad(pad, 0xA000, 0xA000, 400)) {
+      REXLOG_INFO("ncaabb10: {} cannot vibrate: {}", SDL_GetGamepadName(pad), SDL_GetError());
+    }
+  });
+}
+
+// The name of the controller the input system gave a player, or empty: the SDL pad of the same
+// make, preferring the one whose player number (its lights) is that player's. Skips pads already
+// named for another player.
+std::string PlayerPadName(uint32_t user, std::set<SDL_JoystickID>& named) {
+  if (!g_input) {
+    return {};
+  }
+  const auto info = g_input->GetPadInfo(user);
+  if (!info) {
+    return {};
+  }
+  SDL_Gamepad* best = nullptr;
+  ForEachGamepad([&](SDL_Gamepad* pad) {
+    const SDL_JoystickID id = SDL_GetGamepadID(pad);
+    if (named.contains(id) || (info->vendor && SDL_GetGamepadVendor(pad) != info->vendor) ||
+        (info->product && SDL_GetGamepadProduct(pad) != info->product)) {
+      return;
+    }
+    if (!best || SDL_GetGamepadPlayerIndex(pad) == static_cast<int>(user)) {
+      best = pad;
+    }
+  });
+  if (!best) {
+    return "Controller";
+  }
+  named.insert(SDL_GetGamepadID(best));
+  const char* name = SDL_GetGamepadName(best);
+  return name && *name ? name : "Controller";
+}
+
+// ---------------------------------------------------------------------------------------------
+// Notices and the frame rate, drawn over the game
+//
+// A small window that takes no input: a few seconds of text when a controller connects,
+// disconnects or runs low, and the frame rate when Options turns it on. It is in the UI system
+// only while it has something to show, since any dialog makes the UI build a frame for every
+// present. UI thread only.
+
+struct Notice {
+  std::string text;
+  std::chrono::steady_clock::time_point until;
+};
+std::vector<Notice> g_notices;
+bool g_hud_added = false;
+
+float ApplyUiScale(const ImGuiIO& io);
+
+class Hud final : public rex::ui::DialogBase {
+ public:
+  ~Hud() { g_hud_added = false; }
+
+  bool Draw(ImGuiIO& io) override {
+    const auto now = std::chrono::steady_clock::now();
+    std::erase_if(g_notices, [&](const Notice& notice) { return notice.until <= now; });
+    // With the counter on it stays from the launcher on, and draws the counter once the game runs.
+    if (g_notices.empty() && !Settings().show_fps.Get()) {
+      return false;  // Removed; ShowNotice or Options adds it again.
+    }
+    const bool fps = Settings().show_fps.Get() && g_graphics && g_in_game;
+    const float scale = ApplyUiScale(io);
+    constexpr ImGuiWindowFlags kFlags =
+        ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav |
+        ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoBringToFrontOnFocus |
+        ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysAutoResize;
+    const float margin = 12 * scale;
+    if (fps) {
+      ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - margin, margin), ImGuiCond_Always,
+                              ImVec2(1, 0));
+      ImGui::SetNextWindowBgAlpha(0.5f);
+      if (ImGui::Begin("##ncaabb10_fps", nullptr, kFlags)) {
+        const rex::gpu::FrameStats stats = g_graphics->GetFrameStats();
+        ImGui::Text("%.0f fps  %.1f ms", stats.fps, stats.frame_time_ms);
+      }
+      ImGui::End();
+    }
+    if (!g_notices.empty()) {
+      ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y - 4 * margin),
+                              ImGuiCond_Always, ImVec2(0.5f, 1));
+      ImGui::SetNextWindowBgAlpha(0.75f);
+      if (ImGui::Begin("##ncaabb10_notices", nullptr, kFlags)) {
+        for (const Notice& notice : g_notices) {
+          ImGui::TextUnformatted(notice.text.c_str());
+        }
+      }
+      ImGui::End();
+    }
+    return true;
+  }
+};
+
+void AddHud() {
+  if (!g_hud_added && g_ui) {
+    g_hud_added = true;
+    g_ui->AddDialog(std::make_unique<Hud>());
+  }
+}
+
+void ShowNotice(std::string text) {
+  REXLOG_INFO("ncaabb10: notice: {}", text);
+  g_notices.push_back({std::move(text), std::chrono::steady_clock::now() + std::chrono::seconds(4)});
+  if (g_notices.size() > 3) {
+    g_notices.erase(g_notices.begin());
+  }
+  AddHud();
+}
+
 // Once per ImGui frame, from the Draw of whichever front end window is showing.
 void FeedGamepads(ImGuiIO& io) {
   static int fed_frame = -1;
@@ -1107,19 +1302,22 @@ void FeedGamepads(ImGuiIO& io) {
   }
 }
 
-// Guide (the Xbox or PS button), or Back held while pressing Start, opens and closes Options
-// from the controller, in the launcher and in game. A thread watches for it: no window is drawn
-// in game for a Draw to check from.
-class PadShortcuts {
+// A thread that watches the controllers, since no window is drawn in game for a Draw to check
+// from:
+// - Guide (the Xbox or PS button), or Back held while pressing Start, opens and closes Options,
+//   in the launcher and in game.
+// - In game, a controller that connects or disconnects, or whose battery runs low, gets a notice.
+class PadWatcher {
  public:
   void Start(rex::ui::IUISystem& ui) {
     if (thread_.joinable() || ui.IsHeadless()) {
       return;
     }
     stop_ = false;
+    shared_ = GetBool("hid.shared_pads");
     thread_ = std::thread([this, &ui] {
       bool was_down = false;
-      while (!stop_) {
+      for (uint32_t tick = 0; !stop_; ++tick) {
         std::this_thread::sleep_for(std::chrono::milliseconds(16));
         bool down = false;
         ForEachGamepad([&](SDL_Gamepad* pad) {
@@ -1132,6 +1330,9 @@ class PadShortcuts {
           ui.PostTask([&ui] { ui.ToggleOverlay("options"); });
         }
         was_down = down;
+        if (tick % 16 == 0) {  // About four times a second.
+          WatchConnections(ui, tick % (16 * 120) == 0);  // The batteries every 30 s.
+        }
       }
     });
   }
@@ -1143,14 +1344,75 @@ class PadShortcuts {
     }
   }
 
-  ~PadShortcuts() { Stop(); }
+  ~PadWatcher() { Stop(); }
 
  private:
+  struct Pad {
+    std::string name;
+    int seen = 0;  // Polls it has been there; its player number settles in the first.
+    bool announced = false;
+    bool battery_warned = false;
+  };
+
+  void WatchConnections(rex::ui::IUISystem& ui, bool check_batteries) {
+    int count = 0;
+    SDL_JoystickID* ids = SDL_GetGamepads(&count);
+    std::set<SDL_JoystickID> present(ids, ids + (ids ? count : 0));
+    SDL_free(ids);
+    // Only in game: the launcher lists the controllers itself. A pad there at startup is no news.
+    const bool in_game = g_in_game;
+    for (const SDL_JoystickID id : present) {
+      auto [it, added] = pads_.try_emplace(id);
+      Pad& pad = it->second;
+      if (added) {
+        const char* name = SDL_GetGamepadNameForID(id);
+        pad.name = name && *name ? name : "Controller";
+        pad.announced = !in_game || first_;
+      }
+      if (++pad.seen >= 2 && !pad.announced) {
+        pad.announced = true;
+        const int player = SDL_GetGamepadPlayerIndexForID(id);
+        std::string text = "Controller connected: " + pad.name;
+        if (player >= 0 && player < 4 && !shared_) {
+          text += std::format(" (player {})", player + 1);
+        }
+        Post(ui, std::move(text));
+      }
+      if (check_batteries && in_game && !pad.battery_warned) {
+        int percent = -1;
+        SDL_Gamepad* open = SDL_GetGamepadFromID(id);
+        if (open && SDL_GetGamepadPowerInfo(open, &percent) == SDL_POWERSTATE_ON_BATTERY &&
+            percent >= 0 && percent <= 10) {
+          pad.battery_warned = true;
+          Post(ui, std::format("Controller battery low: {} ({}%)", pad.name, percent));
+        }
+      }
+    }
+    for (auto it = pads_.begin(); it != pads_.end();) {
+      if (present.contains(it->first)) {
+        ++it;
+        continue;
+      }
+      if (in_game && it->second.announced) {
+        Post(ui, "Controller disconnected: " + it->second.name);
+      }
+      it = pads_.erase(it);
+    }
+    first_ = false;
+  }
+
+  void Post(rex::ui::IUISystem& ui, std::string text) {
+    ui.PostTask([text = std::move(text)]() mutable { ShowNotice(std::move(text)); });
+  }
+
   std::atomic<bool> stop_{false};
   std::thread thread_;
+  std::map<SDL_JoystickID, Pad> pads_;  // The watcher thread's own.
+  bool first_ = true;
+  bool shared_ = false;  // hid.shared_pads, fixed for the run: every pad is player 1.
 };
 
-PadShortcuts g_pad_shortcuts;
+PadWatcher g_pad_watcher;
 
 // ---------------------------------------------------------------------------------------------
 // Size
@@ -1310,10 +1572,12 @@ class OptionsDialog final : public rex::ui::DialogBase {
                  !(ImGui::IsKeyPressed(ImGuiKey_GamepadStart, false) &&
                    !ImGui::IsKeyDown(ImGuiKey_GamepadBack)) &&
                  !(ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) && !busy_));
+    const PadLabels pad = GetPadLabels();
     if (ImGui::Begin("Options##ncaabb10", &open, ImGuiWindowFlags_NoCollapse)) {
       if (g_in_game) {
         // The title has no pause of its own here: a live game's clock keeps going.
-        ImGui::TextDisabled("The game keeps running behind Options; pause it first (Start).");
+        ImGui::TextDisabled("The game keeps running behind Options; pause it first (%s).",
+                            pad.start.c_str());
       }
       if (ImGui::CollapsingHeader("Display", ImGuiTreeNodeFlags_DefaultOpen)) {
         Checkbox("Fullscreen (Alt+Enter, F11)", "ui.fullscreen");
@@ -1338,8 +1602,18 @@ class OptionsDialog final : public rex::ui::DialogBase {
         static const char* const aa_values[] = {"none", "fxaa", "fxaa_extreme"};
         Combo("Anti-aliasing *", "gpu.xenos.swap_post_effect", aa_labels, aa_values);
         ImGui::SetItemTooltip("Smooths jagged edges on the final picture. No measurable cost.");
+        bool fps = Settings().show_fps.Get();
+        if (ImGui::Checkbox("Show frame rate", &fps)) {
+          SetAndSave("ncaabb10.show_fps", fps ? "true" : "false");
+          if (fps) {
+            ui_.PostTask([] { AddHud(); });  // Between frames, not inside this one's dialog loop.
+          }
+        }
+        ImGui::SetItemTooltip("Frames per second and the time per frame in the top right corner,\n"
+                              "in game. The game runs at 60.");
       }
       if (ImGui::CollapsingHeader("Graphics", ImGuiTreeNodeFlags_DefaultOpen)) {
+        DrawGraphicsCard();
         Combo("Texture filtering", "gpu.anisotropic_override", kAnisoLabels, kAnisoValues);
         ImGui::SetItemTooltip("Game default filters as the console did. Higher values sharpen\n"
                               "the floor at a distance; 16x cost nothing measurable on an Arc A750.");
@@ -1377,18 +1651,23 @@ class OptionsDialog final : public rex::ui::DialogBase {
         Checkbox("Mute when the window is in the background", "apu.mute_unfocused");
       }
       if (ImGui::CollapsingHeader("Controls", ImGuiTreeNodeFlags_DefaultOpen)) {
-        const std::string pads = GamepadNames();
-        if (pads.empty()) {
-          ImGui::TextColored(ImVec4(1, 0.65f, 0.3f, 1), "No controller found. Plug one in at any time.");
-        } else {
-          ImGui::TextWrapped("Controller: %s", pads.c_str());
-        }
+        DrawPlayers();
         Checkbox("Keyboard as controller", "hid.mnk_mode",
                  "The keyboard is player 1's controller, alongside any pad.\n"
                  "Return Start, Space A, Backspace B, L X, P Y, Tab Back\n"
                  "W/A/S/D left stick, arrows right stick, Shift+arrows D-pad\n"
                  "1/3 shoulders, Q/E triggers");
         Checkbox("Vibration", "hid.vibration");
+        ImGui::SameLine();
+        ImGui::BeginDisabled(GamepadNames().empty() || !GetBool("hid.vibration"));
+        if (ImGui::SmallButton("Test")) {
+          TestVibration();
+        }
+        ImGui::EndDisabled();
+        ImGui::SetItemTooltip("Rumbles every controller for a moment.");
+        Checkbox("All controllers are player 1 *", "hid.shared_pads",
+                 "Every controller (and the keyboard) works as player 1's: pick up\n"
+                 "any of them to play. Off, each controller is a player of its own.");
         static constexpr char kDeadzoneHelp[] =
             "Stick movement ignored near the center, on top of the game's own.\n"
             "Raise it if a worn stick drifts.";
@@ -1477,7 +1756,8 @@ class OptionsDialog final : public rex::ui::DialogBase {
           }
         }
       }
-      ImGui::TextDisabled("Controller: D-pad to move, A to choose, B to go back or close");
+      ImGui::TextDisabled("Controller: D-pad or left stick to move, %s to choose, %s to go back "
+                          "or close", pad.choose.c_str(), pad.back.c_str());
     }
     busy_ = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId) || ImGui::IsAnyItemActive() ||
             ImGui::IsKeyDown(ImGuiKey_GamepadFaceRight) || capture_ != nullptr ||
@@ -1559,6 +1839,92 @@ class OptionsDialog final : public rex::ui::DialogBase {
       refocus_ = confirm_;  // Back on the button that asked; Cancel itself goes away.
       confirm_ = Confirm::kNone;
     }
+  }
+
+  // Who plays with what, as the game sees it: a line per player.
+  static void DrawPlayers() {
+    const bool keyboard = GetBool("hid.mnk_mode");
+    const std::string pads = GamepadNames();
+    std::vector<std::string> lines;
+    if (GetBool("hid.shared_pads")) {  // This run's value: it is fixed until a restart.
+      std::string all = pads;
+      if (keyboard) {
+        all += all.empty() ? "keyboard" : ", keyboard";
+      }
+      if (!all.empty()) {
+        lines.push_back("Player 1: " + all);
+      }
+    } else {
+      std::set<SDL_JoystickID> named;
+      for (uint32_t user = 0; user < 4; ++user) {
+        std::string who = PlayerPadName(user, named);
+        if (user == 0 && keyboard) {
+          who += who.empty() ? "keyboard" : " + keyboard";
+        }
+        if (!who.empty()) {
+          lines.push_back(std::format("Player {}: {}", user + 1, who));
+        }
+      }
+      if (named.empty() && !pads.empty()) {
+        lines.push_back("Controllers: " + pads);  // Not given to a player yet.
+      }
+    }
+    if (pads.empty()) {
+      ImGui::TextColored(kWarnColor, "No controller found. Plug one in at any time.");
+    }
+    for (const std::string& line : lines) {
+      ImGui::TextWrapped("%s", line.c_str());
+    }
+  }
+
+  // The card the game renders on. The list is the default renderer's (Direct3D 12 on Windows,
+  // Vulkan elsewhere); with another one chosen in the config file there is nothing to offer.
+  static void DrawGraphicsCard() {
+    const GraphicsCards& list = ListGraphicsCards();
+    const std::string driver = GetText("gpu.driver");
+#if defined(_WIN32)
+    const bool listed = driver == "any" || driver == "d3d12";
+#else
+    const bool listed = driver == "any" || driver == "vulkan";
+#endif
+    if (!listed || list.cards.empty()) {
+      return;
+    }
+    // The renderer's setting holds the card this run started on (-1: the renderer chose).
+    const std::string running = GetText(list.setting);
+    const char* in_use = "the one the renderer chose";
+    for (const GraphicsCard& card : list.cards) {
+      if (std::to_string(card.index) == running) {
+        in_use = card.name.c_str();
+      }
+    }
+    if (list.cards.size() == 1) {
+      ImGui::Text("Graphics card: %s", list.cards[0].name.c_str());
+      ImGui::SetItemTooltip("Rendering with %s.", list.api);
+      return;
+    }
+    std::vector<std::string> labels = {
+        list.preferred >= 0 ? "Automatic: " + list.cards[list.preferred].name : "Automatic"};
+    for (const GraphicsCard& card : list.cards) {
+      labels.push_back(card.name);
+    }
+    std::vector<const char*> items;
+    for (const std::string& label : labels) {
+      items.push_back(label.c_str());
+    }
+    const std::string chosen = GetShown("ncaabb10.graphics_card");
+    int index = 0;
+    for (size_t i = 0; i < list.cards.size(); ++i) {
+      if (!chosen.empty() && list.cards[i].name == chosen) {
+        index = static_cast<int>(i) + 1;
+      }
+    }
+    if (ImGui::Combo("Graphics card *", &index, items.data(), static_cast<int>(items.size()))) {
+      SetAndSave("ncaabb10.graphics_card", index == 0 ? "" : list.cards[index - 1].name);
+    }
+    ImGui::SetItemTooltip("In use: %s (%s).\nAutomatic takes the fastest card: on a laptop, the "
+                          "dedicated one\nrather than the one built into the processor.",
+                          in_use, list.api);
   }
 
   // Puts the controller cursor on the next button if a canceled question came from it.
@@ -2149,8 +2515,9 @@ class LauncherDialog final : public rex::ui::DialogBase {
     ImGui::Separator();
     ImGui::Spacing();
     // Controls, then the controller and the launcher setting.
-    ImGui::TextDisabled("Arrows/D-pad: move   Enter/A: choose   Esc: quit   "
-                        "F1/Guide: Options   F11: fullscreen");
+    const PadLabels labels = GetPadLabels();
+    ImGui::TextDisabled("Arrows/D-pad: move   Enter/%s: choose   Esc: quit   F1/%s: Options   "
+                        "F11: fullscreen", labels.choose.c_str(), labels.guide.c_str());
     if (pads.empty()) {
       ImGui::TextDisabled("No controller found: the keyboard works as one (see Options).");
     } else {
@@ -2432,6 +2799,40 @@ void UseFolderThisSession(const fs::path& folder) {
   }
 }
 
+// Hands the renderer the card to use, before it starts: the one the player chose in Options (kept
+// by name, which stays right when cards are added or the system lists them in another order), else
+// the fastest. At the title layer, so gpu.d3d12.adapter or gpu.vulkan.device in the config file or
+// on the command line still wins.
+void ChooseGraphicsCard(rex::SettingsRegistry& settings) {
+  const GraphicsCards& list = ListGraphicsCards();
+  int pick = list.preferred;
+  bool chosen = false;
+  const std::string wanted = Settings().graphics_card.Get();
+  if (!wanted.empty()) {
+    const auto found = std::ranges::find(list.cards, wanted, &GraphicsCard::name);
+    if (found == list.cards.end()) {
+      REXLOG_WARN("ncaabb10: graphics card '{}' is not there; using the fastest one", wanted);
+    } else if (!CanRender(*found)) {
+      REXLOG_WARN("ncaabb10: graphics card '{}' cannot run Direct3D 12; using the fastest one",
+                  wanted);
+    } else {
+      pick = static_cast<int>(found - list.cards.begin());
+      chosen = true;
+    }
+  }
+  if (pick < 0) {
+    return;
+  }
+  const GraphicsCard& card = list.cards[static_cast<size_t>(pick)];
+  if (auto set = settings.SetText(rex::SettingLayer::kTitle, list.setting, std::to_string(card.index));
+      !set) {
+    REXLOG_WARN("ncaabb10: could not set {}: {}", list.setting, set.error().GetDescription());
+    return;
+  }
+  REXLOG_INFO("ncaabb10: graphics card {} ({} = {}, {})", card.name, list.setting, card.index,
+              chosen ? "chosen in Options" : "the fastest");
+}
+
 }  // namespace
 
 void Configure(rex::SettingsRegistry& settings) {
@@ -2445,6 +2846,7 @@ void Configure(rex::SettingsRegistry& settings) {
   if (fs::exists(OptionsFile(), ec)) {
     LoadUserSettings(settings);
   }
+  ChooseGraphicsCard(settings);
 }
 
 #if !defined(_WIN32)
@@ -2477,7 +2879,9 @@ void InstallUI(rex::app::TitleApp& app) {
   SetWindowIcon();
 #endif
   g_input = &app.GetInput();
+  g_graphics = &app.GetGraphics();
   rex::ui::IUISystem& ui = app.GetUI();
+  g_ui = &ui;
   static constexpr rex::ui::OverlayConfig kOverlays[] = {
       {"options", {rex::VirtualKey::kF1, rex::KeyModifiers::kNone},
        [](rex::ui::IUISystem& ui) -> std::unique_ptr<rex::ui::IDialog> {
@@ -2489,12 +2893,17 @@ void InstallUI(rex::app::TitleApp& app) {
   if (auto added = ui.AddOverlays(kOverlays); !added) {
     REXLOG_WARN("ncaabb10: adding the Options overlay failed: {}", added.error().GetDescription());
   }
-  g_pad_shortcuts.Start(ui);
+  g_pad_watcher.Start(ui);
+  if (Settings().show_fps.Get()) {
+    AddHud();
+  }
 }
 
 void UninstallUI() {
-  g_pad_shortcuts.Stop();
+  g_pad_watcher.Stop();
   g_input = nullptr;
+  g_ui = nullptr;
+  g_graphics = nullptr;
   // Keeps what the player last chose in F4 for settings Options manages, for the next start.
   if (AdoptOtherChanges()) {
     Save();
